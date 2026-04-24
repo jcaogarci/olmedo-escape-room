@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LA CASA OLMEDO — Dentro</title>
+  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=IM+Fell+English:ital@0;1&family=Special+Elite&display=swap" rel="stylesheet" />
+</head>
+<body class="game-body">
+
+  <div class="noise-overlay"></div>
+  <div class="vignette"></div>
+  <div class="scene-transition" id="sceneTransition"></div>
+
+  <!-- HUD superior -->
+  <div id="gameHUD">
+    <div class="hud-timer" id="hudTimer">90:00</div>
+    <div class="hud-phase-bar">
+      <div class="hud-phase-fill" id="hudPhaseFill" style="width:0%"></div>
+    </div>
+    <div class="hud-phase-label" id="hudPhaseLabel">LA ENTRADA</div>
+  </div>
+
+  <!-- Inventario -->
+  <div class="inventory-bar">
+    <div class="inventory-label">Inventario:</div>
+    <div class="inventory-items" id="inventoryItems">
+      <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);font-style:italic;">vacío</span>
+    </div>
+  </div>
+
+  <!-- Pista automática -->
+  <div class="hint-panel" id="hintPanel">
+    <div class="hint-label">⚑ Susurro del pasado</div>
+    <div class="hint-text" id="hintText">...</div>
+  </div>
+
+  <!-- Mensaje entrante -->
+  <div class="incoming-message" id="incomingMsg">
+    <div class="msg-header">
+      <span id="msgFrom">ORIGEN DESCONOCIDO</span>
+      <button class="msg-close" onclick="closeMessage()">✕</button>
+    </div>
+    <div class="msg-body" id="msgBody">...</div>
+  </div>
+
+  <!-- Overlay de susto -->
+  <div class="scare-overlay" id="scareOverlay">
+    <div class="scare-text" id="scareText"></div>
+  </div>
+
+  <!-- Canvas principal del juego -->
+  <div id="gameCanvas">
+    <!-- Contenido inyectado por JavaScript -->
+  </div>
+
+  <!-- Pantalla de fin -->
+  <div id="endgameScreen" style="display:none" class="endgame-screen">
+    <div class="endgame-title" id="endTitle"></div>
+    <p class="endgame-text" id="endText"></p>
+    <div class="endgame-score" id="endScore"></div>
+    <button class="action-btn" onclick="window.location.href='index.html'">Volver al inicio</button>
+  </div>
+
+<script src="script.js"></script>
+</body>
+</html>
