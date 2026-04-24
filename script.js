@@ -1,529 +1,357 @@
 /* ================================================================
-   LA CASA OLMEDO — ESCAPE ROOM DE TERROR
-   Script principal · Lógica completa del juego
+   LA CASA OLMEDO — TERROR ESCAPE ROOM v2
+   Bug fix · Screamers SVG · Sonidos variados · Terror extremo
    ================================================================ */
-
 'use strict';
 
-// ──────────────────────────────────────────────
-// ESTADO DEL JUEGO
-// ──────────────────────────────────────────────
 const STATE = {
-  phase: 0,                    // Fase actual (0-5)
-  totalPhases: 6,
-  timerSeconds: 90 * 60,       // 90 minutos
-  timerInterval: null,
+  phase: 0, totalPhases: 6,
+  timerSeconds: 90*60, timerInterval: null,
   startTime: Date.now(),
-  inventory: [],               // Items recogidos
-  solved: {},                  // Puzzles resueltos
-  attempts: {},                // Intentos por puzzle
-  hintsGiven: {},              // Pistas ya dadas
-  scaresCued: false,           // Ya se lanzaron eventos de miedo
-  lastActivity: Date.now(),    // Para detectar inactividad
+  inventory: [], solved: {},
+  advancing: false,        // ← FIX doble avance
+  attempts: {}, hintsGiven: {},
+  lastActivity: Date.now(),
   ambientInterval: null,
-  eventQueue: [],              // Cola de eventos dinámicos
-  messagesSent: [],            // Mensajes ya enviados
-  lockDigits: [0, 0, 0, 0],   // Cerradura
-  ritualSlots: ['', '', '', ''], // Puzzle ritual
-  score: 100,                  // Puntuación base
+  lockDigits: [0,0,0,0],
+  ritualSlots: ['','','',''],
+  score: 100,
 };
 
-// ──────────────────────────────────────────────
-// SONIDOS ATMOSFÉRICOS (Web Audio API)
-// ──────────────────────────────────────────────
-const AC = window.AudioContext ? new AudioContext() : null;
+// ─── AUDIO ───
+const AC = (window.AudioContext||window.webkitAudioContext)
+           ? new (window.AudioContext||window.webkitAudioContext)() : null;
+function resumeAC(){ if(AC&&AC.state==='suspended') AC.resume(); }
 
-function playTone(freq, duration, type = 'sine', vol = 0.05) {
-  if (!AC) return;
-  try {
-    AC.resume();
-    const osc = AC.createOscillator();
-    const gain = AC.createGain();
-    osc.connect(gain);
-    gain.connect(AC.destination);
-    osc.frequency.value = freq;
-    osc.type = type;
-    gain.gain.setValueAtTime(0, AC.currentTime);
-    gain.gain.linearRampToValueAtTime(vol, AC.currentTime + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + duration);
-    osc.start(AC.currentTime);
-    osc.stop(AC.currentTime + duration);
-  } catch(e) {}
+function playTone(freq,dur,type='sine',vol=0.05,delay=0){
+  if(!AC) return; resumeAC();
+  try{
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination);
+    o.frequency.value=freq; o.type=type;
+    const t=AC.currentTime+delay;
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(vol,t+0.05);
+    g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    o.start(t); o.stop(t+dur+0.05);
+  }catch(e){}
 }
-
-function playCreak() {
-  if (!AC) return;
-  try {
-    AC.resume();
-    // Ruido de madera crujiendo
-    const buf = AC.createBuffer(1, AC.sampleRate * 0.8, AC.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (AC.sampleRate * 0.3));
-    }
-    const src = AC.createBufferSource();
-    src.buffer = buf;
-    const filter = AC.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 200;
-    filter.Q.value = 0.5;
-    const gain = AC.createGain();
-    gain.gain.value = 0.3;
-    src.connect(filter);
-    filter.connect(gain);
-    gain.connect(AC.destination);
-    src.start();
-  } catch(e) {}
+function playNoise(dur,vol=0.04,filter=400){
+  if(!AC) return; resumeAC();
+  try{
+    const buf=AC.createBuffer(1,AC.sampleRate*dur,AC.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+    const src=AC.createBufferSource(); src.buffer=buf;
+    const f=AC.createBiquadFilter(); f.type='bandpass'; f.frequency.value=filter; f.Q.value=0.8;
+    const g=AC.createGain(); g.gain.value=vol;
+    src.connect(f); f.connect(g); g.connect(AC.destination);
+    src.start(); src.stop(AC.currentTime+dur);
+  }catch(e){}
 }
-
-function playDrip() {
-  playTone(180, 0.3, 'sine', 0.06);
-  setTimeout(() => playTone(160, 0.2, 'sine', 0.03), 100);
+function playCreak(){ playNoise(0.9,0.22,180); }
+function playDrip(){ playTone(160,0.4,'sine',0.07); setTimeout(()=>playTone(140,0.2,'sine',0.03),120); }
+function playWrong(){ playTone(180,0.5,'sawtooth',0.07); setTimeout(()=>playTone(150,0.3,'sawtooth',0.04),150); }
+function playUnlock(){ [523,659,784,1047].forEach((f,i)=>playTone(f,0.3,'triangle',0.07,i*0.12)); }
+function playGlitch(){ [440,220,880,110].forEach((f,i)=>playTone(f,0.04,'square',0.04,i*0.03)); }
+function playDoorSlam(){ playNoise(0.15,0.55,100); setTimeout(()=>playNoise(0.3,0.18,80),160); }
+function playScream(){
+  if(!AC) return; resumeAC();
+  try{
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination); o.type='sawtooth';
+    o.frequency.setValueAtTime(1100,AC.currentTime);
+    o.frequency.exponentialRampToValueAtTime(180,AC.currentTime+1.3);
+    g.gain.setValueAtTime(0.14,AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+1.6);
+    o.start(); o.stop(AC.currentTime+1.7);
+  }catch(e){}
 }
-
-function playGlitch() {
-  if (!AC) return;
-  try {
-    AC.resume();
-    [440, 220, 880, 110].forEach((f, i) => {
-      setTimeout(() => playTone(f, 0.05, 'square', 0.04), i * 30);
-    });
-  } catch(e) {}
-}
-
-function playUnlock() {
-  [523, 659, 784].forEach((f, i) => {
-    setTimeout(() => playTone(f, 0.25, 'triangle', 0.08), i * 120);
+function playHeartbeat(fast=false){
+  if(!AC) return; resumeAC();
+  const gap=fast?0.18:0.28;
+  [[0,0.07],[gap,0.05]].forEach(([d,v])=>{
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination); o.type='sine'; o.frequency.value=55;
+    const t=AC.currentTime+d;
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(v,t+0.03);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+    o.start(t); o.stop(t+0.2);
   });
 }
-
-function playWrong() {
-  playTone(180, 0.4, 'sawtooth', 0.06);
-  setTimeout(() => playTone(160, 0.3, 'sawtooth', 0.04), 100);
+function playWhisper(){
+  if(!AC) return; resumeAC();
+  try{
+    const buf=AC.createBuffer(1,AC.sampleRate*2.5,AC.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*0.3;
+    const src=AC.createBufferSource(); src.buffer=buf;
+    const f=AC.createBiquadFilter(); f.type='bandpass'; f.frequency.value=2200; f.Q.value=2;
+    const lfo=AC.createOscillator(), lg=AC.createGain();
+    lfo.frequency.value=5; lg.gain.value=0.3; lfo.connect(lg);
+    const mg=AC.createGain(); mg.gain.value=0.04; lg.connect(mg.gain);
+    src.connect(f); f.connect(mg); mg.connect(AC.destination);
+    lfo.start(); src.start(); src.stop(AC.currentTime+2.5); lfo.stop(AC.currentTime+2.5);
+  }catch(e){}
+}
+function playChurch(){
+  [220,330,440].forEach((f,i)=>{ playTone(f,3,'sine',0.025,i*0.5); playTone(f*2,2,'sine',0.012,i*0.5+0.1); });
 }
 
-function playHeartbeat() {
-  if (!AC) return;
-  try {
-    AC.resume();
-    const playBeat = (t) => {
-      const osc = AC.createOscillator();
-      const gain = AC.createGain();
-      osc.connect(gain);
-      gain.connect(AC.destination);
-      osc.type = 'sine';
-      osc.frequency.value = 60;
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.3, t + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-      osc.start(t);
-      osc.stop(t + 0.2);
-    };
-    const now = AC.currentTime;
-    playBeat(now);
-    playBeat(now + 0.25);
-  } catch(e) {}
+function startAmbience(){
+  if(!AC) return;
+  let tick=0;
+  STATE.ambientInterval=setInterval(()=>{
+    tick++; resumeAC();
+    if(tick%3===0) playTone(32+Math.random()*18,4+Math.random()*3,'sine',0.01);
+    if(Math.random()<0.13) playDrip();
+    if(Math.random()<0.06) playCreak();
+    if(Math.random()<0.05) playWhisper();
+    if(Math.random()<0.007) playChurch();
+    if(STATE.timerSeconds<600) playHeartbeat(STATE.timerSeconds<180);
+  },3500);
 }
 
-// Ambiente continuo de viento bajo
-function startAmbience() {
-  if (!AC) return;
-  STATE.ambientInterval = setInterval(() => {
-    if (Math.random() < 0.3) {
-      playTone(40 + Math.random() * 20, 3 + Math.random() * 4, 'sine', 0.015);
-    }
-    if (Math.random() < 0.1) playDrip();
-    if (Math.random() < 0.05) playCreak();
-  }, 4000);
+// ─── SCREAMERS SVG ───
+const SCREAMERS=[
+  // Cara gritando
+  `<svg viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" style="max-height:65vh;filter:contrast(2) brightness(0.55)">
+    <rect width="400" height="500" fill="#040202"/>
+    <ellipse cx="200" cy="215" rx="118" ry="148" fill="#180c08"/>
+    <ellipse cx="200" cy="195" rx="98" ry="128" fill="#0c0604"/>
+    <ellipse cx="153" cy="165" rx="27" ry="37" fill="#000"/>
+    <ellipse cx="247" cy="165" rx="27" ry="37" fill="#000"/>
+    <ellipse cx="153" cy="170" rx="7" ry="11" fill="#8b0000" opacity="0.9"/>
+    <ellipse cx="247" cy="170" rx="7" ry="11" fill="#8b0000" opacity="0.9"/>
+    <ellipse cx="200" cy="268" rx="43" ry="54" fill="#000"/>
+    <ellipse cx="200" cy="268" rx="33" ry="39" fill="#180000"/>
+    ${[168,181,194,207,220].map(x=>`<rect x="${x}" y="246" width="10" height="21" rx="2" fill="#c0b090" opacity="0.7"/>`).join('')}
+    ${[175,188,201,214].map(x=>`<rect x="${x}" y="277" width="10" height="19" rx="2" fill="#a09080" opacity="0.6"/>`).join('')}
+    <path d="M98,95 Q128,145 118,195" stroke="#4a0000" stroke-width="2" fill="none" opacity="0.5"/>
+    <path d="M302,115 Q272,155 282,205" stroke="#4a0000" stroke-width="2" fill="none" opacity="0.5"/>
+    <text x="200" y="430" text-anchor="middle" fill="#6b0000" font-size="26" font-family="Georgia,serif" opacity="0.8">NO SALDRÁS</text>
+  </svg>`,
+  // Figura en pasillo
+  `<svg viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg" style="max-height:65vh;filter:contrast(1.9) brightness(0.45)">
+    <defs><radialGradient id="hg" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#180d06"/><stop offset="100%" stop-color="#010101"/></radialGradient></defs>
+    <rect width="600" height="400" fill="url(#hg)"/>
+    <polygon points="0,0 148,118 148,282 0,400" fill="#090603"/>
+    <polygon points="600,0 452,118 452,282 600,400" fill="#090603"/>
+    <polygon points="148,118 452,118 452,282 148,282" fill="#060402"/>
+    <ellipse cx="300" cy="153" rx="17" ry="21" fill="#000"/>
+    <rect x="283" y="173" width="34" height="68" rx="3" fill="#000"/>
+    <line x1="283" y1="193" x2="253" y2="228" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+    <line x1="317" y1="193" x2="347" y2="228" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+    <line x1="291" y1="241" x2="285" y2="286" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+    <line x1="309" y1="241" x2="315" y2="286" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+    <ellipse cx="292" cy="150" rx="4" ry="5" fill="#ff0000" opacity="0.95"/>
+    <ellipse cx="308" cy="150" rx="4" ry="5" fill="#ff0000" opacity="0.95"/>
+    <text x="300" y="360" text-anchor="middle" fill="#3a0000" font-size="20" font-family="Georgia,serif">TE VE</text>
+  </svg>`,
+  // Mano saliendo
+  `<svg viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" style="max-height:65vh;filter:contrast(2)">
+    <rect width="400" height="500" fill="#030202"/>
+    <path d="M158,500 L163,315 Q165,290 173,285 L176,175 Q177,160 186,158 Q195,156 196,170 L198,255 L200,170 Q201,156 210,158 Q219,160 220,175 L222,255 L224,195 Q225,178 236,177 Q247,176 247,194 L246,266 L250,216 Q252,196 263,196 Q274,196 273,216 L270,306 Q288,276 293,286 Q308,306 283,336 L258,376 L253,500 Z" fill="#180e08" stroke="#281408" stroke-width="1"/>
+    <path d="M183,295 Q188,245 186,195" stroke="#080400" stroke-width="2" fill="none"/>
+    <path d="M199,275 Q201,225 200,185" stroke="#080400" stroke-width="2" fill="none"/>
+    <path d="M214,285 Q216,235 215,205" stroke="#080400" stroke-width="2" fill="none"/>
+    <ellipse cx="181" cy="160" rx="7" ry="5" fill="#0d0806"/>
+    <ellipse cx="199" cy="167" rx="7" ry="5" fill="#0d0806"/>
+    <ellipse cx="218" cy="172" rx="7" ry="5" fill="#0d0806"/>
+    <ellipse cx="235" cy="190" rx="7" ry="5" fill="#0d0806"/>
+    <circle cx="189" cy="225" r="4" fill="#5a0000" opacity="0.8"/>
+    <circle cx="209" cy="205" r="3" fill="#5a0000" opacity="0.7"/>
+    <circle cx="227" cy="245" r="5" fill="#8b0000" opacity="0.9"/>
+    <text x="200" y="80" text-anchor="middle" fill="#4a0000" font-size="22" font-family="Georgia,serif">QUÉDATE</text>
+    <text x="200" y="112" text-anchor="middle" fill="#2a0000" font-size="16" font-family="Georgia,serif">con nosotros</text>
+  </svg>`,
+];
+
+let screamCooldown=false;
+function triggerScreamer(txt){
+  if(screamCooldown) return;
+  screamCooldown=true; setTimeout(()=>screamCooldown=false,14000);
+  const overlay=document.getElementById('scareOverlay');
+  const img=document.getElementById('scareImage');
+  const el=document.getElementById('scareText');
+  if(img) img.innerHTML=SCREAMERS[Math.floor(Math.random()*SCREAMERS.length)];
+  if(el)  el.textContent=txt||'';
+  overlay.classList.add('active');
+  playScream();
+  // Flash blanco
+  const f=document.createElement('div');
+  f.style.cssText='position:fixed;inset:0;background:white;z-index:1001;pointer-events:none;animation:wf 0.3s ease forwards;';
+  document.body.appendChild(f);
+  const s=document.createElement('style'); s.textContent='@keyframes wf{from{opacity:0.9}to{opacity:0}}';
+  document.head.appendChild(s);
+  setTimeout(()=>f.remove(),400);
+  setTimeout(()=>overlay.classList.remove('active'),2300);
 }
 
-// ──────────────────────────────────────────────
-// TIMER
-// ──────────────────────────────────────────────
-function startTimer() {
-  STATE.timerInterval = setInterval(() => {
+// ─── TIMER ───
+function startTimer(){
+  STATE.timerInterval=setInterval(()=>{
     STATE.timerSeconds--;
-
-    const h = Math.floor(STATE.timerSeconds / 3600);
-    const m = Math.floor((STATE.timerSeconds % 3600) / 60);
-    const s = STATE.timerSeconds % 60;
-    const display = STATE.timerSeconds >= 3600
-      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-
-    const el = document.getElementById('hudTimer');
-    if (el) {
-      el.textContent = display;
-      if (STATE.timerSeconds <= 600) el.classList.add('urgent');
-      if (STATE.timerSeconds <= 300) playHeartbeat();
-    }
-
-    // Pistas automáticas por tiempo
-    checkAutoHints();
-    checkDynamicEvents();
-
-    if (STATE.timerSeconds <= 0) {
-      clearInterval(STATE.timerInterval);
-      triggerGameOver('tiempo');
-    }
-  }, 1000);
+    const m=Math.floor(STATE.timerSeconds/60), s=STATE.timerSeconds%60;
+    const el=document.getElementById('hudTimer');
+    if(el){ el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; if(STATE.timerSeconds<=600) el.classList.add('urgent'); }
+    checkAutoHints(); checkDynamicEvents();
+    if(STATE.timerSeconds<=0){ clearInterval(STATE.timerInterval); triggerGameOver(); }
+  },1000);
 }
 
-// ──────────────────────────────────────────────
-// INVENTARIO
-// ──────────────────────────────────────────────
-const ITEM_NAMES = {
-  'llave_maestra':   '🗝 Llave Maestra',
-  'paginas_diario':  '📜 Páginas del Diario',
-  'frasco_sangre':   '🩸 Frasco Extraño',
-  'foto_familia':    '🖼 Fotografía Rasgada',
-  'cirio_negro':     '🕯 Cirio Negro',
-  'carta_oculta':    '✉ Carta Oculta',
-  'sello_olmedo':    '⚜ Sello Olmedo',
-  'llave_sotano':    '🗝 Llave Sótano',
+// ─── INVENTARIO ───
+const ITEM_NAMES={'llave_maestra':'🗝 Llave Maestra','paginas_diario':'📜 Diario','foto_familia':'🖼 Fotografía','cirio_negro':'🕯 Cirio Negro','carta_oculta':'✉ Carta Oculta','sello_olmedo':'⚜ Sello Olmedo','llave_sotano':'🗝 Llave Sótano'};
+function addItem(id){ if(STATE.inventory.includes(id)) return; STATE.inventory.push(id); renderInventory(); showMessage('OBJETO ENCONTRADO',`Recogido: ${ITEM_NAMES[id]||id}`); }
+function hasItem(id){ return STATE.inventory.includes(id); }
+function renderInventory(){
+  const c=document.getElementById('inventoryItems'); if(!c) return;
+  if(!STATE.inventory.length){ c.innerHTML='<span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);font-style:italic;">vacío</span>'; return; }
+  c.innerHTML=STATE.inventory.map(id=>`<div class="inv-item" onclick="inspectItem('${id}')">${ITEM_NAMES[id]||id}</div>`).join('');
+}
+function inspectItem(id){
+  const descs={'llave_maestra':'Hierro oxidado. Iniciales "R.O." en el mango. Huele a tierra húmeda.','paginas_diario':'Letra femenina temblorosa. Palabras rodeadas en rojo. Tinta diluida, como si llorara.','foto_familia':'Reverso: "La cuarta nunca salió en las fotos." Hay una mancha donde debería estar.','cirio_negro':'Nunca encendido. Números grabados en la cera que aparecen y desaparecen.','carta_oculta':'"Si lees esto, ya es tarde. El sótano. El número es el año en que todo terminó."','sello_olmedo':'Un cuervo sobre una torre. El metal está siempre frío.','llave_sotano':'Pequeña, negra. Marcada con "S". No se calienta aunque la sostengas horas.'};
+  const ex=document.getElementById('itemInspect'); if(ex) ex.remove();
+  const div=document.createElement('div'); div.id='itemInspect'; div.className='incoming-message';
+  div.style.cssText='position:fixed;bottom:80px;right:0;top:auto;width:320px;';
+  div.innerHTML=`<div class="msg-header"><span>INSPECCIÓN</span><button class="msg-close" onclick="document.getElementById('itemInspect').remove()">✕</button></div><div class="msg-body" style="font-style:italic;">${descs[id]||'Misterioso.'}</div>`;
+  document.body.appendChild(div); setTimeout(()=>div.classList.add('show'),50);
+}
+
+// ─── MENSAJES ───
+function showMessage(from,body,delay=0){ setTimeout(()=>{ document.getElementById('msgFrom').textContent=from; document.getElementById('msgBody').textContent=body; document.getElementById('incomingMsg').classList.add('show'); playGlitch(); },delay); }
+function closeMessage(){ document.getElementById('incomingMsg').classList.remove('show'); }
+
+// ─── PISTAS ───
+const HINTS={
+  0:['El reloj de pie lleva décadas parado. ¿En qué hora están sus agujas?','Manecilla corta (horas) → 11. Manecilla larga roja (minutos) → 47.','El código es: 1147'],
+  1:['Las palabras marcadas en rojo tienen algo en común: sus iniciales.','R-O-S-A-R-I-O. Léelas en orden.','Escribe: ROSARIO'],
+  2:['El cifrado César. ¿Cuántos miembros tenía la familia? Ese es el desplazamiento.','Eran 7. Cada letra se desplaza 7 posiciones hacia atrás: J→C, B→U, H→A, Y→R, A→T, H→A.','La palabra es: CUARTA'],
+  3:['Las runas siguen el orden del ritual: Norte, Este, Sur, Oeste.','Fuego (N), Agua (E), Tierra (S), Viento (O).','🔥 arriba · 💧 derecha · 🌿 abajo · 💨 izquierda'],
+  4:['La receta tiene 3 pasos. Cuenta los ingredientes de cada uno.','Paso 1: 3 ingredientes. Paso 2: 7. Paso 3: 4.','El código es: 374'],
+  5:['La carta dice "el año en que todo terminó". Búscalo en los documentos.','El titular del periódico y el diario lo confirman.','El código es: 1947'],
 };
-
-function addItem(id) {
-  if (STATE.inventory.includes(id)) return;
-  STATE.inventory.push(id);
-  renderInventory();
-  showMessage('OBJETO ENCONTRADO', `Has recogido: ${ITEM_NAMES[id] || id}`);
-  playUnlock();
+function checkAutoHints(){
+  const p=STATE.phase; if(!STATE.hintsGiven[p]) STATE.hintsGiven[p]=0;
+  const mins=(Date.now()-STATE.lastActivity)/60000;
+  if(mins>8 && STATE.hintsGiven[p]<(HINTS[p]?.length||0)){ giveHint(p,STATE.hintsGiven[p]++); STATE.lastActivity=Date.now(); }
+}
+function giveHint(p,idx){
+  const h=HINTS[p]?.[idx]; if(!h) return;
+  const pan=document.getElementById('hintPanel'); document.getElementById('hintText').textContent=h;
+  pan.classList.add('show'); setTimeout(()=>pan.classList.remove('show'),13000);
+}
+function triggerHintByFailure(p){
+  const idx=Math.min(STATE.hintsGiven[p]||0,(HINTS[p]?.length||1)-1);
+  giveHint(p,idx); if((STATE.hintsGiven[p]||0)<((HINTS[p]?.length||1)-1)) STATE.hintsGiven[p]=(STATE.hintsGiven[p]||0)+1;
+  STATE.score=Math.max(0,STATE.score-5);
 }
 
-function hasItem(id) { return STATE.inventory.includes(id); }
+// ─── EVENTOS DINÁMICOS ───
+const EVENTS=[
+  {t:82*60,fn:()=>showMessage('SISTEMA','Alguien activó la alarma de la mansión... desde dentro.',600)},
+  {t:72*60,fn:()=>{ playWhisper(); showMessage('DESCONOCIDO','¿Por qué has vuelto? No debías volver.',900); }},
+  {t:64*60,fn:()=>{ triggerScreenGlitch(); showMessage('R.O.','Ayúdame. Todavía estoy aquí. En el sótano.',1600); }},
+  {t:54*60,fn:()=>showMessage('SISTEMA','⚠ ACTIVIDAD PARANORMAL — Sector B — Nivel crítico',300)},
+  {t:46*60,fn:()=>{ playDoorSlam(); showMessage('PADRE OLMEDO','La niña nunca debió nacer. Ese fue el principio.',700); }},
+  {t:38*60,fn:()=>{ if(Math.random()<0.6) triggerScreamer('TE OBSERVO'); else triggerScreenGlitch(); }},
+  {t:28*60,fn:()=>{ triggerScreenGlitch(); showMessage('ALGO','YA FALTA POCO. ¿O CREÍAS QUE IBAS A SALIR?',0); }},
+  {t:20*60,fn:()=>showMessage('ROSARIO OLMEDO','El código del sótano... 1947. Ese fue el año. Corre.',300)},
+  {t:11*60,fn:()=>{ showMessage('SISTEMA','⚠ 11 MINUTOS. La mansión te retiene.',0); triggerHeartbeatEffect(); }},
+  {t:6*60, fn:()=>triggerScreamer('¡CORRE!')},
+  {t:2*60, fn:()=>{ showMessage('ALGO','QUEDATE · QUEDATE · QUEDATE',0); playScream(); }},
+];
+EVENTS.forEach(e=>e.sent=false);
+function checkDynamicEvents(){ EVENTS.forEach(e=>{ if(!e.sent&&STATE.timerSeconds<=e.t){ e.sent=true; e.fn(); } }); }
+function triggerScreenGlitch(){ document.body.classList.add('glitch-body'); playGlitch(); setTimeout(()=>document.body.classList.remove('glitch-body'),380); }
+function triggerHeartbeatEffect(){ let n=0; const iv=setInterval(()=>{ playHeartbeat(true); if(++n>=10) clearInterval(iv); },650); }
 
-function renderInventory() {
-  const container = document.getElementById('inventoryItems');
-  if (!container) return;
-  if (STATE.inventory.length === 0) {
-    container.innerHTML = '<span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);font-style:italic;">vacío</span>';
-    return;
-  }
-  container.innerHTML = STATE.inventory.map(id =>
-    `<div class="inv-item" title="${ITEM_NAMES[id] || id}" onclick="inspectItem('${id}')">${ITEM_NAMES[id] || id}</div>`
-  ).join('');
-}
-
-function inspectItem(id) {
-  const descriptions = {
-    'llave_maestra':  'Una llave de hierro oxidado. En el mango hay grabadas las iniciales "R.O." Las nervaduras de la llave forman un patrón extraño.',
-    'paginas_diario': 'Páginas arrancadas del diario de Rosario Olmedo. La tinta está diluida, como si hubiera llorado al escribirlas. Algunas palabras están rodeadas en rojo.',
-    'frasco_sangre':  'Un frasco de cristal marrón. Dentro hay un líquido oscuro y espeso. Una etiqueta dice: "Para cuando llegue la hora. No antes."',
-    'foto_familia':   'Una fotografía familiar de 1946. El padre, la madre, y tres niños. En el reverso hay escrito: "La cuarta nunca salió en las fotos."',
-    'cirio_negro':    'Un cirio completamente negro, nunca encendido. En la cera están grabados números: aparecen y desaparecen según la luz.',
-    'carta_oculta':   'Una carta doblada en cuatro. La letra es temblorosa: "Si lees esto, ya es tarde para mí. El sótano. El número es el año en que todo terminó."',
-    'sello_olmedo':   'Un sello de lacre con el escudo de los Olmedo: un cuervo sobre una torre. Hay algo grabado en el metal que solo se ve con la luz correcta.',
-    'llave_sotano':   'Una llave pequeña y negra. Tiene marcada la letra "S". El metal está frío, incluso después de sostenerla durante varios minutos.',
-  };
-  const desc = descriptions[id] || 'Un objeto misterioso.';
-
-  const canvas = document.getElementById('gameCanvas');
-  const existing = document.getElementById('itemInspect');
-  if (existing) existing.remove();
-
-  const div = document.createElement('div');
-  div.id = 'itemInspect';
-  div.className = 'incoming-message';
-  div.style.cssText = 'position:fixed;bottom:80px;right:0;top:auto;width:320px;';
-  div.innerHTML = `
-    <div class="msg-header">
-      <span>INSPECCIÓN</span>
-      <button class="msg-close" onclick="document.getElementById('itemInspect').remove()">✕</button>
-    </div>
-    <div class="msg-body" style="font-style:italic;">${desc}</div>
-  `;
-  document.body.appendChild(div);
-  setTimeout(() => div.classList.add('show'), 50);
-}
-
-// ──────────────────────────────────────────────
-// MENSAJES DINÁMICOS
-// ──────────────────────────────────────────────
-function showMessage(from, body, delay = 0) {
-  setTimeout(() => {
-    const panel = document.getElementById('incomingMsg');
-    document.getElementById('msgFrom').textContent = from;
-    document.getElementById('msgBody').textContent = body;
-    panel.classList.add('show');
-    playGlitch();
-  }, delay);
-}
-
-function closeMessage() {
-  document.getElementById('incomingMsg').classList.remove('show');
-}
-
-// ──────────────────────────────────────────────
-// PISTAS AUTOMÁTICAS
-// ──────────────────────────────────────────────
-const HINTS = {
-  0: [ // Fase 0: Hall de entrada
-    'El reloj de pie lleva décadas parado. ¿En qué hora?',
-    'Los cuatro dígitos están grabados en el tiempo que marcaba el reloj cuando la familia desapareció.',
-    'Respuesta: el reloj marca las 11:47. El código es 1147.',
-  ],
-  1: [ // Fase 1: Biblioteca
-    'Las palabras en rojo del diario no son aleatorias.',
-    'Las letras iniciales de esas palabras forman algo cuando se leen en orden.',
-    'Las palabras son: Rojo, Oscuro, Seis, Anciano, Río, Iglesia, Otoño. Las iniciales: R-O-S-A-R-I-O.',
-  ],
-  2: [ // Fase 2: Dormitorio
-    'El cifrado César usa un desplazamiento relacionado con la familia.',
-    'Eran siete miembros en la familia. El desplazamiento es 7.',
-    'Desplaza cada letra 7 posiciones hacia atrás en el alfabeto.',
-  ],
-  3: [ // Fase 3: Capilla
-    'Las runas deben colocarse en el orden del ritual de invocación.',
-    'El ritual siempre empieza por el Norte y sigue las agujas del reloj: Fuego, Agua, Tierra, Viento.',
-    'Coloca las runas: 🔥 arriba, 💧 derecha, 🌿 abajo, 💨 izquierda.',
-  ],
-  4: [ // Fase 4: Cocina
-    'La receta de Rosario oculta más de lo que parece.',
-    'El número de ingredientes de cada paso es la clave.',
-    'Cuenta los ingredientes: 3 en el primero, 7 en el segundo, 4 en el tercero. El código es 374.',
-  ],
-  5: [ // Fase 5: Sótano
-    'El símbolo del sello Olmedo es la llave. Búscalo en la pared.',
-    'El orden correcto es el que aparece en la fotografía familiar: padre, madre, hijos de mayor a menor.',
-    'El código final: 1-9-4-7. El año en que la familia desapareció.',
-  ],
-};
-
-function checkAutoHints() {
-  const phase = STATE.phase;
-  if (!STATE.attempts[phase]) STATE.attempts[phase] = 0;
-  if (!STATE.hintsGiven[phase]) STATE.hintsGiven[phase] = 0;
-
-  // Dar pista si llevan más de 8 minutos en la misma fase
-  const timeInPhase = (Date.now() - STATE.lastActivity) / 1000 / 60;
-  const hintIndex = STATE.hintsGiven[phase];
-
-  if (timeInPhase > 8 && hintIndex < HINTS[phase]?.length) {
-    giveHint(phase, hintIndex);
-    STATE.hintsGiven[phase]++;
-    STATE.lastActivity = Date.now(); // Reiniciar para siguiente pista
-  }
-}
-
-function giveHint(phase, index) {
-  const hints = HINTS[phase];
-  if (!hints || !hints[index]) return;
-  const panel = document.getElementById('hintPanel');
-  document.getElementById('hintText').textContent = hints[index];
-  panel.classList.add('show');
-  setTimeout(() => panel.classList.remove('show'), 12000);
-}
-
-// Dar pista manualmente (por fallos)
-function triggerHintByFailure(phase) {
-  const hintIndex = Math.min(STATE.hintsGiven[phase] || 0, (HINTS[phase]?.length || 1) - 1);
-  giveHint(phase, hintIndex);
-  if (!(STATE.hintsGiven[phase] >= (HINTS[phase]?.length - 1))) {
-    STATE.hintsGiven[phase] = (STATE.hintsGiven[phase] || 0) + 1;
-  }
-  STATE.score = Math.max(0, STATE.score - 5);
-}
-
-// ──────────────────────────────────────────────
-// EVENTOS DINÁMICOS ATMOSFÉRICOS
-// ──────────────────────────────────────────────
-const DYNAMIC_EVENTS = [
-  { time: 80 * 60, sent: false, fn: () => showMessage('SISTEMA', 'Conexión establecida. Te observamos.', 500) },
-  { time: 70 * 60, sent: false, fn: () => showMessage('DESCONOCIDO', '¿Por qué has vuelto? No debías volver.', 800) },
-  { time: 60 * 60, sent: false, fn: () => { triggerScreenGlitch(); showMessage('R.O.', 'Ayúdame. Aún estoy aquí. En el sótano.', 1500); }},
-  { time: 50 * 60, sent: false, fn: () => showMessage('SISTEMA', 'ALERTA: Actividad paranormal detectada en sector B.', 300) },
-  { time: 40 * 60, sent: false, fn: () => showMessage('PADRE OLMEDO', 'La niña nunca debió nacer. Eso fue el principio.', 600) },
-  { time: 30 * 60, sent: false, fn: () => { triggerScreenGlitch(); showMessage('DESCONOCIDO', 'YA FALTA POCO. ¿O CREÍAS QUE IBAS A SALIR?', 0); }},
-  { time: 20 * 60, sent: false, fn: () => showMessage('ROSARIO OLMEDO', 'El código del sótano... 1947. Ese fue el año. Corre.', 200) },
-  { time: 10 * 60, sent: false, fn: () => { showMessage('SISTEMA', '⚠ ALERTA CRÍTICA: 10 minutos restantes.', 0); triggerHeartbeatEffect(); }},
-  { time: 5 * 60,  sent: false, fn: () => showMessage('ALGO', 'QUEDATE. QUEDATE. QUEDATE.', 0) },
+// ─── FASES ───
+const PHASES=[
+  {id:0,label:'HALL DE ENTRADA', render:renderPhase0},
+  {id:1,label:'BIBLIOTECA',       render:renderPhase1},
+  {id:2,label:'DORMITORIO',       render:renderPhase2},
+  {id:3,label:'CAPILLA PRIVADA',  render:renderPhase3},
+  {id:4,label:'COCINA',           render:renderPhase4},
+  {id:5,label:'SÓTANO SELLADO',   render:renderPhase5},
 ];
 
-function checkDynamicEvents() {
-  DYNAMIC_EVENTS.forEach(event => {
-    if (!event.sent && STATE.timerSeconds <= event.time) {
-      event.sent = true;
-      event.fn();
-    }
-  });
+function advancePhase(){
+  if(STATE.advancing) return;       // ← FIX
+  STATE.advancing=true;
+  STATE.phase++; STATE.lastActivity=Date.now(); STATE.score=Math.max(0,STATE.score-2);
+  if(STATE.phase>=PHASES.length){ triggerVictory(); return; }
+  document.getElementById('hudPhaseFill').style.width=((STATE.phase/PHASES.length)*100)+'%';
+  document.getElementById('hudPhaseLabel').textContent=PHASES[STATE.phase].label;
+  const tr=document.getElementById('sceneTransition'); tr.classList.add('active'); playDoorSlam();
+  setTimeout(()=>{ PHASES[STATE.phase].render(); tr.classList.remove('active'); STATE.advancing=false; },1100);
 }
 
-function triggerScreenGlitch() {
-  const body = document.body;
-  body.classList.add('glitch-body');
-  playGlitch();
-  setTimeout(() => body.classList.remove('glitch-body'), 300);
-}
-
-function triggerHeartbeatEffect() {
-  let count = 0;
-  const interval = setInterval(() => {
-    playHeartbeat();
-    count++;
-    if (count >= 5) clearInterval(interval);
-  }, 800);
-}
-
-// ──────────────────────────────────────────────
-// SISTEMA DE FASES
-// ──────────────────────────────────────────────
-const PHASES = [
-  { id: 0, name: 'LA ENTRADA',   label: 'HALL DE ENTRADA',  render: renderPhase0 },
-  { id: 1, name: 'LA BIBLIOTECA',label: 'BIBLIOTECA',        render: renderPhase1 },
-  { id: 2, name: 'EL DORMITORIO',label: 'DORMITORIO MAYOR',  render: renderPhase2 },
-  { id: 3, name: 'LA CAPILLA',   label: 'CAPILLA PRIVADA',   render: renderPhase3 },
-  { id: 4, name: 'LA COCINA',    label: 'COCINA',             render: renderPhase4 },
-  { id: 5, name: 'EL SÓTANO',    label: 'SÓTANO SELLADO',    render: renderPhase5 },
-];
-
-function advancePhase() {
-  STATE.phase++;
-  STATE.lastActivity = Date.now();
-  STATE.score = Math.max(0, STATE.score - 2); // Pequeña penalización por tiempo
-
-  if (STATE.phase >= PHASES.length) {
-    triggerVictory();
-    return;
-  }
-
-  // Actualizar HUD
-  const fill = (STATE.phase / PHASES.length) * 100;
-  document.getElementById('hudPhaseFill').style.width = fill + '%';
-  document.getElementById('hudPhaseLabel').textContent = PHASES[STATE.phase].label;
-
-  // Transición de escena
-  const transition = document.getElementById('sceneTransition');
-  transition.classList.add('active');
-  playCreak();
-
-  setTimeout(() => {
-    PHASES[STATE.phase].render();
-    transition.classList.remove('active');
-  }, 1000);
-}
-
-// ──────────────────────────────────────────────
-// UTILIDAD: Validación con feedback
-// ──────────────────────────────────────────────
-function checkAnswer(inputId, feedbackId, correctAnswer, onCorrect, puzzleKey) {
-  const input = document.getElementById(inputId);
-  const feedback = document.getElementById(feedbackId);
-  if (!input || !feedback) return;
-
-  const value = input.value.trim().toUpperCase().replace(/\s+/g, '');
-  const correct = correctAnswer.toUpperCase().replace(/\s+/g, '');
-
-  if (!STATE.attempts[puzzleKey]) STATE.attempts[puzzleKey] = 0;
-  STATE.attempts[puzzleKey]++;
-
-  if (value === correct) {
-    input.classList.remove('wrong');
-    input.classList.add('correct');
-    input.disabled = true;
-    feedback.className = 'feedback-msg success show';
-    feedback.textContent = getSuccessMessage();
-    STATE.solved[puzzleKey] = true;
-    playUnlock();
-    markAttemptDots(puzzleKey);
-    setTimeout(() => onCorrect(), 1500);
+// ─── VALIDACIÓN ───
+function checkAnswer(inputId,feedbackId,correct,onCorrect,key){
+  if(STATE.solved[key]) return;   // ← FIX
+  const input=document.getElementById(inputId), fb=document.getElementById(feedbackId);
+  if(!input||!fb) return;
+  const val=input.value.trim().toUpperCase().replace(/\s+/g,'');
+  if(!STATE.attempts[key]) STATE.attempts[key]=0; STATE.attempts[key]++;
+  if(val===correct.toUpperCase().replace(/\s+/g,'')){
+    STATE.solved[key]=true; input.classList.add('correct'); input.disabled=true;
+    const btn=document.querySelector(`button[onclick*="${key}"]`)||input.parentElement?.querySelector('.action-btn');
+    if(btn) btn.disabled=true;
+    fb.className='feedback-msg success show'; fb.textContent=getSMsg(); playUnlock(); markDots(key);
+    setTimeout(onCorrect,1600);
   } else {
-    input.classList.add('wrong');
-    input.classList.remove('correct');
-    feedback.className = 'feedback-msg error show';
-    feedback.textContent = getErrorMessage(STATE.attempts[puzzleKey]);
-    playWrong();
-    setTimeout(() => input.classList.remove('wrong'), 500);
-
-    // Dar pista si falla mucho
-    if (STATE.attempts[puzzleKey] >= 3) {
-      triggerHintByFailure(STATE.phase);
-    }
-    markAttemptDots(puzzleKey);
-    STATE.score = Math.max(0, STATE.score - 3);
+    input.classList.add('wrong'); fb.className='feedback-msg error show'; fb.textContent=getEMsg(STATE.attempts[key]);
+    playWrong(); setTimeout(()=>input.classList.remove('wrong'),500);
+    if(STATE.attempts[key]>=3) triggerHintByFailure(STATE.phase);
+    if(STATE.attempts[key]>=4&&Math.random()<0.38) setTimeout(()=>triggerScreamer(),900);
+    markDots(key); STATE.score=Math.max(0,STATE.score-3);
   }
 }
+const SMSGS=['...la cerradura cede con un sonido húmedo.','...algo se mueve en las paredes.','...un crujido largo recorre el suelo.','...el frío desaparece por un instante.','...un susurro dice "sí".'];
+const EMSGS=['Incorrecto.','No es eso. Algo cambia de sitio.','El ambiente se vuelve más pesado.','Escuchas una risa, casi infantil.','La vela parpadea. Tres veces.'];
+function getSMsg(){ return SMSGS[Math.floor(Math.random()*SMSGS.length)]; }
+function getEMsg(n){ return EMSGS[Math.min(n-1,EMSGS.length-1)]; }
+function markDots(key){ document.querySelectorAll(`[data-dots="${key}"] .attempt-dot`).forEach((d,i)=>{ if(i<(STATE.attempts[key]||0)) d.classList.add('used'); }); }
 
-const SUCCESS_MESSAGES = [
-  '...la cerradura cede con un sonido húmedo.',
-  '...algo se mueve en las paredes.',
-  '...un crujido largo recorre el suelo.',
-  '...el frío desaparece por un momento.',
-  '...escuchas un susurro que dice "sí".',
-];
-const ERROR_MESSAGES = [
-  'Incorrecto. Vuelves a intentarlo.',
-  'No es eso. Algo en la habitación cambia de posición.',
-  'El ambiente se vuelve más pesado.',
-  'Escuchas una risa lejana.',
-  'La vela parpadea. Tres veces.',
-];
+// ─── HELPERS ───
+function phaseDots(cur){ return `<div class="phase-indicator">${Array.from({length:6},(_,i)=>`<div class="phase-dot ${i<cur?'done':i===cur?'active':''}"></div>`).join('')}</div>`; }
+function dotRow(n){ return Array.from({length:n},()=>'<div class="attempt-dot"></div>').join(''); }
 
-function getSuccessMessage() { return SUCCESS_MESSAGES[Math.floor(Math.random() * SUCCESS_MESSAGES.length)]; }
-function getErrorMessage(n) { return ERROR_MESSAGES[Math.min(n - 1, ERROR_MESSAGES.length - 1)]; }
-
-function markAttemptDots(key) {
-  const dots = document.querySelectorAll(`[data-dots="${key}"] .attempt-dot`);
-  const count = STATE.attempts[key] || 0;
-  dots.forEach((d, i) => { if (i < count) d.classList.add('used'); });
-}
-
-// ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // FASE 0: HALL DE ENTRADA
-// Puzzle: Cerradura de 4 dígitos (código del reloj parado)
-// ──────────────────────────────────────────────
-function renderPhase0() {
-  const canvas = document.getElementById('gameCanvas');
-  canvas.innerHTML = `
-    <div class="phase-indicator" id="phaseIndicator">
-      ${Array.from({length: 6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel candle-effect" data-room="HALL DE ENTRADA · NOCHE">
+// ═══════════════════════════════════════════════
+function renderPhase0(){
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(0)}
+    <div class="narrative-panel candle-effect" data-room="HALL DE ENTRADA · MEDIANOCHE">
       <p class="narrative-text">
-        La puerta se cierra detrás de ti con un golpe sordo. El olor es lo primero:
-        <em>madera podrida, cera vieja, y algo más.</em> Algo orgánico.<br><br>
-        El hall se extiende ante ti en penumbra. Un <em>reloj de pie</em> domina la pared del fondo,
-        sus agujas detenidas para siempre. Frente a ti, una <span class="disturbing">puerta de hierro
-        con una cerradura de cuatro dígitos</span> bloquea el paso a las habitaciones interiores.<br><br>
-        En el suelo hay marcas de arrastre. Recientes.
+        La puerta se cierra detrás de ti con un golpe seco. El eco rebota en las paredes durante demasiado tiempo.<br><br>
+        El olor llega primero: <em>madera podrida, cera vieja</em>, y algo más. Algo orgánico que no debería estar aquí.<br><br>
+        Un <em>reloj de pie</em> domina la pared del fondo, sus agujas inmóviles. Frente a ti, una
+        <span class="disturbing">puerta de hierro con cerradura de cuatro dígitos</span> bloquea el interior.<br><br>
+        En el suelo hay marcas de arrastre. <span class="disturbing">Recientes.</span>
       </p>
     </div>
-
-    <!-- Imagen SVG del reloj -->
-    <div class="puzzle-container">
+    <div style="position:relative;width:100%;height:5px;overflow:visible;margin-bottom:6px;">
+      <div style="position:absolute;width:50px;height:90px;background:radial-gradient(ellipse,rgba(0,0,0,0.5)0%,transparent 70%);top:-45px;animation:shadow-walk 14s ease-in-out infinite;pointer-events:none;"></div>
+    </div>
+    <div class="puzzle-container" style="background:rgba(14,9,6,0.96);">
       <div class="puzzle-title"><span class="puzzle-icon">🕰</span>El Reloj Olmedo</div>
-      <div style="display:flex;justify-content:center;margin-bottom:20px;">
+      <div style="display:flex;justify-content:center;margin-bottom:8px;position:relative;">
         ${generateClockSVG()}
       </div>
-      <p style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-dim);text-align:center;margin-bottom:20px;letter-spacing:0.1em;">
-        "El tiempo se detuvo cuando todo acabó."<br>— Inscripción en la base del reloj
-      </p>
-
-      <div class="puzzle-title" style="margin-top:24px;"><span class="puzzle-icon">🔒</span>Cerradura de la Puerta Interior</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        Los cuatro dígitos que marcan las agujas del reloj. Primero la hora, luego los minutos.
-      </p>
-
+      <p style="font-family:var(--font-mono);font-size:0.65rem;color:var(--blood);letter-spacing:0.2em;text-align:center;margin-bottom:24px;animation:blink-text 2.5s ease infinite;">"EL TIEMPO SE DETUVO CUANDO TODO ACABÓ"</p>
+      <div class="puzzle-title"><span class="puzzle-icon">🔒</span>Cerradura de la Puerta</div>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">Hora, luego minutos. Haz clic para girar cada dígito.</p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-        <div id="lockDots" style="display:flex;gap:6px;margin-bottom:8px;">
-          ${STATE.lockDigits.map((d,i) =>
-            `<div class="lock-digit" id="lockD${i}" onclick="cycleDigit(${i})">${d}</div>`
-          ).join('')}
-        </div>
-        <p style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);">← Haz clic en los dígitos para cambiarlos</p>
-        <button class="action-btn primary-btn" onclick="checkLock()">ABRIR CERRADURA</button>
+        <div style="display:flex;gap:8px;">${STATE.lockDigits.map((d,i)=>`<div class="lock-digit" id="lockD${i}" onclick="cycleDigit(${i})">${d}</div>`).join('')}</div>
+        <button class="action-btn primary-btn" id="lockBtn" onclick="checkLock()">ABRIR CERRADURA</button>
         <div class="feedback-msg" id="lockFeedback"></div>
-        <div class="attempt-dots" data-dots="lock0">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="lock0">${dotRow(5)}</div>
       </div>
     </div>
-
     <div class="document-card">
-      <div class="document-header">NOTA ENCONTRADA · EN EL SUELO</div>
+      <div class="document-header">NOTA · ENCONTRADA EN EL SUELO</div>
       <div class="document-body">
 Ha venido otra vez. Anoche lo escuché en el pasillo.
 No dormí. No puedo dormir ya.
@@ -533,453 +361,281 @@ El código de la puerta es la hora en que
 Papá dice que lo <span class="key-word">recuerdo</span> todo.
 Tiene razón. No puedo olvidarlo.
 
-        — R
+      — R
       </div>
-      <div class="document-stain" style="width:80px;height:60px;top:20px;right:30px;"></div>
-    </div>
-  `;
+      <div class="document-stain" style="width:90px;height:70px;top:15px;right:25px;"></div>
+    </div>`;
 }
 
-function generateClockSVG() {
-  // Reloj SVG que marca las 11:47
-  return `
-  <svg viewBox="0 0 200 220" width="180" style="filter:drop-shadow(0 0 20px rgba(139,0,0,0.3))">
-    <!-- Cuerpo del reloj -->
-    <rect x="60" y="10" width="80" height="200" rx="6" fill="#1a1008" stroke="#3a2d20" stroke-width="2"/>
-    <rect x="65" y="60" width="70" height="70" rx="35" fill="#0a0806" stroke="#2a1e14" stroke-width="1"/>
-
-    <!-- Esfera -->
-    <circle cx="100" cy="95" r="32" fill="#0e0a06" stroke="#3a2d20" stroke-width="1.5"/>
-
-    <!-- Números de la esfera -->
-    <text x="100" y="68" text-anchor="middle" fill="#5a4530" font-size="7" font-family="serif">12</text>
-    <text x="129" y="99" text-anchor="middle" fill="#5a4530" font-size="7" font-family="serif">3</text>
-    <text x="100" y="129" text-anchor="middle" fill="#5a4530" font-size="7" font-family="serif">6</text>
-    <text x="71" y="99" text-anchor="middle" fill="#5a4530" font-size="7" font-family="serif">9</text>
-
-    <!-- Manecilla de horas — 11 (330°) -->
-    <line x1="100" y1="95"
-          x2="${100 + 18*Math.sin((11*30-90)*Math.PI/180)}"
-          y2="${95 + 18*Math.cos((11*30-90)*Math.PI/180+Math.PI)}"
-          stroke="#c8b89a" stroke-width="2.5" stroke-linecap="round"/>
-
-    <!-- Manecilla de minutos — 47 (282°) -->
-    <line x1="100" y1="95"
-          x2="${100 + 25*Math.sin((47*6-90)*Math.PI/180)}"
-          y2="${95 + 25*Math.cos((47*6-90)*Math.PI/180+Math.PI)}"
-          stroke="#8b0000" stroke-width="1.5" stroke-linecap="round"/>
-
-    <!-- Centro -->
-    <circle cx="100" cy="95" r="3" fill="#8b0000"/>
-
-    <!-- Péndulo (decorativo) -->
-    <line x1="100" y1="130" x2="100" y2="185" stroke="#2a1e14" stroke-width="1.5"/>
-    <circle cx="100" cy="190" r="10" fill="#1a1008" stroke="#3a2d20" stroke-width="1.5"/>
-
-    <!-- Texto inferior -->
-    <text x="100" y="210" text-anchor="middle" fill="#2a1e14" font-size="6" font-family="serif" letter-spacing="3">OLMEDO 1920</text>
+function generateClockSVG(){
+  const cx=110,cy=110,r=80;
+  const hA=((11*30+47*0.5)-90)*Math.PI/180, hx=cx+44*Math.cos(hA), hy=cy+44*Math.sin(hA);
+  const mA=(47*6-90)*Math.PI/180, mx=cx+68*Math.cos(mA), my=cy+68*Math.sin(mA);
+  const nums=Array.from({length:12},(_,i)=>{
+    const a=(i*30-90)*Math.PI/180, n=i===0?12:i, nr=r-13, nx=cx+nr*Math.cos(a), ny=cy+nr*Math.sin(a);
+    const hi=[10,11,0].includes(i);
+    return `<text x="${nx.toFixed(1)}" y="${ny.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="${hi?'#e8dcc8':'#5a4538'}" font-size="${hi?'12':'10'}" font-weight="${hi?'bold':'normal'}" font-family="Georgia,serif">${n}</text>`;
+  }).join('');
+  const ticks=Array.from({length:60},(_,i)=>{
+    const a=(i*6-90)*Math.PI/180, isH=i%5===0, r1=r-2, r2=r-(isH?11:6);
+    return `<line x1="${(cx+r1*Math.cos(a)).toFixed(1)}" y1="${(cy+r1*Math.sin(a)).toFixed(1)}" x2="${(cx+r2*Math.cos(a)).toFixed(1)}" y2="${(cy+r2*Math.sin(a)).toFixed(1)}" stroke="${i===47?'#c0392b':isH?'#4a3828':'#2a1e14'}" stroke-width="${i===47?3:isH?2:1}" stroke-linecap="round"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 220 280" width="210" style="filter:drop-shadow(0 0 30px rgba(139,0,0,0.5))">
+    <rect x="25" y="5" width="170" height="270" rx="8" fill="#110c07" stroke="#4a3020" stroke-width="2"/>
+    <rect x="33" y="13" width="154" height="254" rx="6" fill="#0d0905" stroke="#2a1a10" stroke-width="1"/>
+    <circle cx="${cx}" cy="${cy}" r="${r+9}" fill="#180e08" stroke="#5a3820" stroke-width="2"/>
+    <circle cx="${cx}" cy="${cy}" r="${r+5}" fill="#100a05" stroke="#2a1810" stroke-width="1"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="#1a1008" stroke="#3a2818" stroke-width="1.5"/>
+    ${ticks}${nums}
+    <line x1="${cx}" y1="${cy}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" stroke="#e8dcc8" stroke-width="5" stroke-linecap="round"/>
+    <line x1="${cx}" y1="${cy}" x2="${mx.toFixed(1)}" y2="${my.toFixed(1)}" stroke="#c0392b" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="${cx}" cy="${cy}" r="5" fill="#8b0000" stroke="#c0392b" stroke-width="1.5"/>
+    <line x1="${cx}" y1="${cy+r+9}" x2="${cx}" y2="245" stroke="#2a1808" stroke-width="2"/>
+    <ellipse cx="${cx}" cy="255" rx="17" ry="12" fill="#160c06" stroke="#3a2010" stroke-width="1.5"/>
+    <text x="${cx}" y="274" text-anchor="middle" fill="#2a1808" font-size="7" font-family="Georgia,serif" letter-spacing="3">OLMEDO · 1920</text>
   </svg>`;
 }
 
-function cycleDigit(index) {
-  STATE.lockDigits[index] = (STATE.lockDigits[index] + 1) % 10;
-  const el = document.getElementById(`lockD${index}`);
-  if (el) el.textContent = STATE.lockDigits[index];
-  playTone(300 + index * 50, 0.1, 'triangle', 0.04);
-}
+function cycleDigit(i){ if(STATE.solved['lock0']) return; STATE.lockDigits[i]=(STATE.lockDigits[i]+1)%10; const el=document.getElementById(`lockD${i}`); if(el) el.textContent=STATE.lockDigits[i]; playTone(300+i*50,0.08,'triangle',0.04); }
 
-function checkLock() {
-  const code = STATE.lockDigits.join('');
-  if (!STATE.attempts['lock0']) STATE.attempts['lock0'] = 0;
-  STATE.attempts['lock0']++;
-  const feedback = document.getElementById('lockFeedback');
-
-  if (code === '1147') {
-    STATE.solved['lock0'] = true;
-    STATE.lockDigits.forEach((_,i) => {
-      document.getElementById(`lockD${i}`)?.classList.add('open');
-    });
-    feedback.className = 'feedback-msg success show';
-    feedback.textContent = '...un clic sordo. La cerradura cede. La puerta se abre hacia la oscuridad.';
-    playUnlock();
-    addItem('paginas_diario');
-    setTimeout(() => advancePhase(), 2500);
+function checkLock(){
+  if(STATE.solved['lock0']) return;
+  const code=STATE.lockDigits.join('');
+  if(!STATE.attempts['lock0']) STATE.attempts['lock0']=0; STATE.attempts['lock0']++;
+  markDots('lock0'); const fb=document.getElementById('lockFeedback');
+  if(code==='1147'){
+    STATE.solved['lock0']=true;
+    document.getElementById('lockBtn').disabled=true;
+    STATE.lockDigits.forEach((_,i)=>document.getElementById(`lockD${i}`)?.classList.add('open'));
+    fb.className='feedback-msg success show'; fb.textContent='...un clic sordo. La cerradura cede. La puerta se abre.';
+    playUnlock(); addItem('paginas_diario'); setTimeout(advancePhase,2500);
   } else {
-    feedback.className = 'feedback-msg error show';
-    feedback.textContent = getErrorMessage(STATE.attempts['lock0']);
-    playWrong();
-    if (STATE.attempts['lock0'] >= 3) triggerHintByFailure(0);
-    STATE.lockDigits.forEach((_,i) => {
-      const el = document.getElementById(`lockD${i}`);
-      el?.classList.add('locked');
-      setTimeout(() => el?.classList.remove('locked'), 500);
-    });
-    STATE.score = Math.max(0, STATE.score - 3);
-    markAttemptDots('lock0');
+    fb.className='feedback-msg error show'; fb.textContent=getEMsg(STATE.attempts['lock0']); playWrong();
+    STATE.lockDigits.forEach((_,i)=>{ const el=document.getElementById(`lockD${i}`); el?.classList.add('locked'); setTimeout(()=>el?.classList.remove('locked'),500); });
+    if(STATE.attempts['lock0']>=3) triggerHintByFailure(0);
+    if(STATE.attempts['lock0']>=4&&Math.random()<0.4) setTimeout(()=>triggerScreamer(),700);
+    STATE.score=Math.max(0,STATE.score-3);
   }
 }
 
-// ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // FASE 1: BIBLIOTECA
-// Puzzle: Descifrar las palabras en rojo del diario → ROSARIO
-// ──────────────────────────────────────────────
-function renderPhase1() {
-  const canvas = document.getElementById('gameCanvas');
-  canvas.innerHTML = `
-    <div class="phase-indicator">
-      ${Array.from({length:6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel candle-effect" data-room="BIBLIOTECA · PLANTA BAJA">
+// ═══════════════════════════════════════════════
+function renderPhase1(){
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(1)}
+    <div class="narrative-panel" data-room="BIBLIOTECA · PLANTA BAJA" style="border-left-color:#4a3020;background:rgba(16,11,5,0.75);">
       <p class="narrative-text">
-        Miles de libros en estantes que llegan al techo. La mayoría con los lomos quemados.
-        En el centro, <em>un escritorio con las páginas del diario</em> que encontraste en la entrada.<br><br>
-        La letra es femenina, temblorosa. Algunas palabras están <span class="disturbing">rodeadas en tinta roja</span>,
-        como si alguien las hubiera señalado después. O algo.<br><br>
-        Una vitrina al fondo tiene un candado con combinación de letras. Dentro, una llave brillante.
+        Miles de libros con los lomos quemados. El olor a humo lleva décadas impregnado en las paredes.<br><br>
+        En el escritorio, <em>las páginas del diario</em>. Letra femenina y temblorosa. Algunas palabras están
+        <span class="disturbing">rodeadas en tinta roja</span>, como señaladas después de ser escritas.<br><br>
+        Al fondo, una <em>vitrina sellada</em>. Dentro, una llave. El candado pide una combinación de letras.
       </p>
     </div>
-
+    <div style="position:relative;width:100%;height:60px;overflow:hidden;margin-bottom:8px;background:rgba(8,5,2,0.7);border:1px solid #1a1008;">
+      <div style="position:absolute;font-size:1.1rem;top:15px;animation:fall-book 9s ease infinite;">📕</div>
+      <div style="position:absolute;font-size:0.9rem;top:12px;left:65%;animation:fall-book 12s ease 3.5s infinite;">📗</div>
+      <div style="position:absolute;font-size:1rem;top:18px;left:35%;animation:fall-book 7s ease 1s infinite;">📘</div>
+    </div>
     <div class="diary-entry">
-      <div class="diary-date">14 DE OCTUBRE, 1947</div>
-      <div class="document-body" style="white-space:pre-line;font-style:italic;line-height:2.1;font-size:0.95rem;">
+      <div class="diary-date">14 DE OCTUBRE, 1947 · TERCER DÍA SIN DORMIR</div>
+      <div style="white-space:pre-line;font-style:italic;line-height:2.2;font-size:0.95rem;">
 Hoy el padre vino otra vez.
-El <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Rojo</mark> de sus ojos cuando me mira.
-Todo está <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Oscuro</mark> en esta casa.
-<mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Seis</mark> meses llevamos encerrados.
-El viejo <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Anciano</mark> del pueblo tenía razón.
-El <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Río</mark> se llevó a los que intentaron huir.
-La <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Iglesia</mark> no puede ayudarnos.
-Ese <mark style="background:rgba(139,0,0,0.25);color:#c0392b;padding:0 3px;">Otoño</mark> fue el último.
+El <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Rojo</mark> de sus ojos cuando me mira.
+Todo está <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Oscuro</mark> en esta casa.
+<mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Seis</mark> meses llevamos encerrados.
+El viejo <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Anciano</mark> del pueblo tenía razón.
+El <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Río</mark> se llevó a los que intentaron huir.
+La <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Iglesia</mark> no puede ayudarnos.
+Ese <mark style="background:rgba(139,0,0,0.3);color:#e74c3c;padding:0 4px;border-radius:1px;">Otoño</mark> fue el último.
 
-Que alguien lea esto. Por favor.
+Que alguien lea esto algún día. Por favor.
       </div>
     </div>
-
-    <div class="puzzle-container">
+    <div class="puzzle-container" style="border-color:#3a2010;">
       <div class="puzzle-title"><span class="puzzle-icon">🔤</span>Candado de la Vitrina</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        Las palabras marcadas en rojo esconden un nombre. Las iniciales de cada una, en orden, forman la combinación del candado.
-      </p>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">Las palabras en rojo ocultan un nombre. Sus iniciales, en orden.</p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-        <input type="text"
-               class="game-input"
-               id="diaryInput"
-               placeholder="_ _ _ _ _ _ _"
-               maxlength="10"
-               autocomplete="off"
-               onkeyup="if(event.key==='Enter')checkDiaryPuzzle()" />
-        <button class="action-btn primary-btn" onclick="checkDiaryPuzzle()">ABRIR VITRINA</button>
+        <input type="text" class="game-input" id="diaryInput" placeholder="_ _ _ _ _ _ _" maxlength="10" autocomplete="off" onkeyup="if(event.key==='Enter')checkDiary()"/>
+        <button class="action-btn primary-btn" onclick="checkDiary()">ABRIR VITRINA</button>
         <div class="feedback-msg" id="diaryFeedback"></div>
-        <div class="attempt-dots" data-dots="diary1">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="diary1">${dotRow(5)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
+  setTimeout(()=>playWhisper(),3500);
 }
+function checkDiary(){ checkAnswer('diaryInput','diaryFeedback','ROSARIO',()=>{ addItem('llave_maestra'); addItem('foto_familia'); setTimeout(advancePhase,1500); },'diary1'); }
 
-function checkDiaryPuzzle() {
-  checkAnswer('diaryInput', 'diaryFeedback', 'ROSARIO', () => {
-    addItem('llave_maestra');
-    addItem('foto_familia');
-    setTimeout(() => advancePhase(), 1500);
-  }, 'diary1');
-}
-
-// ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // FASE 2: DORMITORIO
-// Puzzle: Cifrado César con desplazamiento 7 → CUARTA
-// ──────────────────────────────────────────────
-function renderPhase2() {
-  const canvas = document.getElementById('gameCanvas');
-  // Texto cifrado con César+7: "JBHYA" = "CUARTA" (C+7=J, U+7=B, A+7=H, R+7=Y, T+7=A, A+7=H)
-  // Verificar: CUARTA con César desplazamiento +7
-  // C(2) +7 = J(9), U(20)+7=B(1), A(0)+7=H(7), R(17)+7=Y(24), T(19)+7=A(0), A(0)+7=H(7)
-  // Cifrado: JBHYAH
-
-  canvas.innerHTML = `
-    <div class="phase-indicator">
-      ${Array.from({length:6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel candle-effect" data-room="DORMITORIO MAYOR · PRIMERA PLANTA">
+// ═══════════════════════════════════════════════
+function renderPhase2(){
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(2)}
+    <div class="narrative-panel" data-room="DORMITORIO MAYOR · PRIMERA PLANTA" style="border-left-color:#6b0000;background:rgba(20,6,6,0.8);">
       <p class="narrative-text">
-        La cama está hecha. Perfectamente hecha. Como si alguien esperara volver.<br><br>
-        En la mesilla, un <em>papel doblado</em> con caracteres extraños. En la pared,
-        una pintura al óleo de la familia Olmedo.<br><br>
-        Contas uno, dos, tres... <span class="disturbing">cinco figuras en la pintura.</span>
-        Pero la fotografía que encontraste mostraba seis. Falta alguien.<br><br>
-        El armario está bloqueado con un cerrojo. En la puerta, una nota pide una palabra.
+        La cama está hecha. Perfectamente hecha, como si esperaran volver.<br><br>
+        En la pared, un óleo de la familia. Cuentas las figuras:
+        <span class="disturbing">cinco. Pero la fotografía mostraba seis.</span> Falta alguien.<br><br>
+        Bajo el colchón, un papel con caracteres extraños. El armario está bloqueado. Una nota en la puerta pide una palabra. La palabra que la familia escondía.
       </p>
     </div>
-
-    <div class="puzzle-container">
-      <div class="puzzle-title"><span class="puzzle-icon">📜</span>El Mensaje Cifrado</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:4px;">
-        Encontrado bajo el colchón, escrito en tinta invisible revelada por el calor de una vela:
-      </p>
-      <div class="cipher-display">J B H Y A H</div>
-      <p class="cipher-key-hint">Cifrado Romano · Familia numerosa · Cada letra desplazada</p>
-
-      <div class="document-card" style="margin-top:16px;">
-        <div class="document-header">FOTOGRAFÍA FAMILIAR · REVERSO</div>
-        <div class="document-body" style="font-style:italic;">
-"La <span class="key-word">cuarta</span> nunca salió en las fotos. Decía que la cámara la asustaba.
+    <div style="width:100%;border:1px solid #2a1010;overflow:hidden;margin-bottom:12px;background:#0a0404;">
+      <svg viewBox="0 0 600 110" width="100%" style="opacity:0.55;">
+        <rect width="600" height="110" fill="#0a0404"/>
+        ${[70,150,230,390,470].map((x,i)=>`<ellipse cx="${x}" cy="34" rx="${14-i*0.5}" ry="${16-i*0.5}" fill="#180a08"/><rect x="${x-10}" y="50" width="${20-i}" height="${38+i*2}" fill="#120706"/>`).join('')}
+        <ellipse cx="310" cy="34" rx="14" ry="16" fill="none" stroke="#3a0808" stroke-width="1" stroke-dasharray="3,3" opacity="0.5"/>
+        <rect x="300" y="50" width="20" height="40" fill="none" stroke="#3a0808" stroke-width="1" stroke-dasharray="3,3" opacity="0.5"/>
+        <text x="310" y="105" text-anchor="middle" fill="#3a0808" font-size="9" font-family="serif" opacity="0.6">?</text>
+        <text x="300" y="106" text-anchor="middle" fill="#1a0606" font-size="7" font-family="Georgia,serif" letter-spacing="4">FAMILIA OLMEDO · 1946</text>
+      </svg>
+    </div>
+    <div class="puzzle-container" style="border-color:#4a1010;background:rgba(18,4,4,0.85);">
+      <div class="puzzle-title"><span class="puzzle-icon">📜</span>Mensaje Cifrado</div>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.88rem;margin-bottom:6px;">Hallado bajo el colchón, en tinta invisible:</p>
+      <div class="cipher-display" style="font-size:1.7rem;letter-spacing:0.45em;">J&nbsp;&nbsp;B&nbsp;&nbsp;H&nbsp;&nbsp;Y&nbsp;&nbsp;A&nbsp;&nbsp;H</div>
+      <p class="cipher-key-hint">Cifrado romano · La familia era numerosa · Desplazamiento igual al número de miembros</p>
+    </div>
+    <div class="document-card" style="border-color:#3a1010;">
+      <div class="document-header">FOTOGRAFÍA FAMILIAR · REVERSO · 1946</div>
+      <div class="document-body" style="font-style:italic;line-height:2.1;">
+"La <span class="key-word">cuarta</span> nunca salió en las fotos.
+Decía que la cámara la asustaba.
 Nosotros sabíamos la verdad.
-<span class="redacted">████████████████████</span>
-Siete éramos. Uno de nosotros no debía existir."
-
-          — R. Olmedo, 1946
-        </div>
+<span class="redacted">████████████████████████</span>
+Siete éramos. Uno no debía existir."
       </div>
+      <div class="document-stain" style="width:100px;height:80px;top:10px;right:20px;"></div>
     </div>
-
-    <div class="puzzle-container">
+    <div class="puzzle-container" style="border-color:#4a1010;">
       <div class="puzzle-title"><span class="puzzle-icon">🚪</span>Cerrojo del Armario</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        Descifra el mensaje y escribe la palabra oculta. ¿Qué es lo que la familia escondía?
-      </p>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">Descifra el mensaje. ¿Qué escondía la familia?</p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-        <input type="text"
-               class="game-input"
-               id="cipherInput"
-               placeholder="_ _ _ _ _ _"
-               maxlength="10"
-               autocomplete="off"
-               onkeyup="if(event.key==='Enter')checkCipherPuzzle()" />
-        <button class="action-btn primary-btn" onclick="checkCipherPuzzle()">ABRIR ARMARIO</button>
+        <input type="text" class="game-input" id="cipherInput" placeholder="_ _ _ _ _ _" maxlength="10" autocomplete="off" onkeyup="if(event.key==='Enter')checkCipher()"/>
+        <button class="action-btn primary-btn" onclick="checkCipher()">ABRIR ARMARIO</button>
         <div class="feedback-msg" id="cipherFeedback"></div>
-        <div class="attempt-dots" data-dots="cipher2">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="cipher2">${dotRow(5)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
+  setTimeout(()=>{ playWhisper(); }, 2500);
+  setTimeout(()=>{ showMessage('ALGO','Estamos en la habitación contigo.',0); }, 20000);
 }
+function checkCipher(){ checkAnswer('cipherInput','cipherFeedback','CUARTA',()=>{ addItem('cirio_negro'); addItem('carta_oculta'); setTimeout(advancePhase,1500); },'cipher2'); }
 
-function checkCipherPuzzle() {
-  checkAnswer('cipherInput', 'cipherFeedback', 'CUARTA', () => {
-    addItem('cirio_negro');
-    addItem('carta_oculta');
-    setTimeout(() => advancePhase(), 1500);
-  }, 'cipher2');
-}
-
-// ──────────────────────────────────────────────
-// FASE 3: CAPILLA PRIVADA
-// Puzzle: Ritual de las runas — orden correcto (N,E,S,O → 🔥💧🌿💨)
-// ──────────────────────────────────────────────
-function renderPhase3() {
-  STATE.ritualSlots = ['', '', '', ''];
-  const canvas = document.getElementById('gameCanvas');
-  canvas.innerHTML = `
-    <div class="phase-indicator">
-      ${Array.from({length:6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel candle-effect" data-room="CAPILLA PRIVADA · PLANTA BAJA">
+// ═══════════════════════════════════════════════
+// FASE 3: CAPILLA
+// ═══════════════════════════════════════════════
+function renderPhase3(){
+  STATE.ritualSlots=['','','',''];
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(3)}
+    <div class="narrative-panel" data-room="CAPILLA PRIVADA · PLANTA BAJA" style="border-left-color:#3d1a00;background:rgba(14,7,2,0.85);">
       <p class="narrative-text">
-        Una capilla personal. Los bancos están volcados. En el altar,
-        <em>cuatro símbolos grabados</em> en piedra, con huecos para colocar algo.<br><br>
-        En el suelo, cuatro piedras con runas dispersas. En la pared, un texto en latín antiguo
-        describe el <span class="disturbing">orden del ritual de los cuatro elementos.</span><br><br>
-        La puerta trasera de la capilla lleva al siguiente pasillo. Está sellada con cera negra.
-        Completa el ritual y el sello se romperá.
+        Los bancos están volcados. Decenas de velas apagadas cubriendo cada superficie.<br><br>
+        En el altar, <em>cuatro huecos tallados</em> esperan algo. En el suelo, cuatro piedras con símbolos elementales.<br><br>
+        En la pared, grabado a sangre, un texto en latín describe el orden del ritual.
+        <span class="disturbing">Complétalo y la puerta sellada se abrirá.</span><br><br>
+        No estás solo en esta capilla.
       </p>
     </div>
-
-    <div class="document-card">
-      <div class="document-header">INSCRIPCIÓN EN LA PARED · LATÍN ANTIGUO</div>
-      <div class="document-body" style="font-style:italic;line-height:2.2;">
+    <div style="display:flex;justify-content:center;gap:20px;padding:16px 0;background:rgba(8,4,1,0.85);border:1px solid #1a0e04;margin-bottom:12px;">
+      ${[0,1.2,0.5,1.8,0.3,2.0].map((d,i)=>`
+        <div style="display:flex;flex-direction:column;align-items:center;animation:candle-sway ${2.2+i*0.3}s ease-in-out infinite ${d}s;">
+          <div style="width:6px;height:14px;background:radial-gradient(ellipse at 50% 0%,#fff8e0 0%,#ffaa22 50%,transparent 100%);border-radius:50% 50% 30% 30%;animation:flame-flicker ${0.4+i*0.08}s ease-in-out infinite alternate;"></div>
+          <div style="width:9px;height:${25+i*6}px;background:linear-gradient(180deg,#1c1008,#0d0804);border:1px solid #2a1810;"></div>
+        </div>`).join('')}
+    </div>
+    <div class="document-card" style="border-color:#3d1a00;">
+      <div class="document-header">INSCRIPCIÓN EN LA PARED · ESCRITA CON SANGRE</div>
+      <div class="document-body" style="font-style:italic;line-height:2.3;">
 "<span class="key-word">Ignis</span> a septentrione incipit,
 <span class="key-word">Aqua</span> in oriente sequitur,
 <span class="key-word">Terra</span> in meridie ponetur,
 <span class="key-word">Ventus</span> in occidente claudit."
 
-— <em>El fuego comienza en el Norte,
-el agua le sigue en el Este,
-la tierra se pone en el Sur,
-el viento cierra en el Oeste.</em>
+<span style="color:var(--text-dim);font-size:0.84rem;">El fuego empieza en el Norte · el agua sigue en el Este
+la tierra en el Sur · el viento cierra en el Oeste</span>
       </div>
     </div>
-
-    <div class="puzzle-container">
+    <div class="puzzle-container" style="border-color:#3d1a00;background:rgba(10,5,1,0.9);">
       <div class="puzzle-title"><span class="puzzle-icon">⛧</span>Círculo Ritual</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        Arrastra las runas a las posiciones correctas del círculo según el ritual.
-      </p>
-
-      <!-- Runas disponibles -->
-      <div style="display:flex;gap:12px;justify-content:center;margin-bottom:20px;flex-wrap:wrap;">
-        <div class="rune-stone" id="rune_fire" draggable="true" onclick="selectRune('🔥','Fuego')"
-          style="padding:10px 16px;border:1px solid #3a2d20;background:#100806;cursor:pointer;font-size:1.4rem;transition:all 0.2s;"
-          onmouseover="this.style.borderColor='var(--blood)'" onmouseout="this.style.borderColor='#3a2d20'">
-          🔥 <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);vertical-align:middle;">Fuego</span>
-        </div>
-        <div class="rune-stone" id="rune_water" draggable="true" onclick="selectRune('💧','Agua')"
-          style="padding:10px 16px;border:1px solid #3a2d20;background:#060810;cursor:pointer;font-size:1.4rem;transition:all 0.2s;"
-          onmouseover="this.style.borderColor='var(--blood)'" onmouseout="this.style.borderColor='#3a2d20'">
-          💧 <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);vertical-align:middle;">Agua</span>
-        </div>
-        <div class="rune-stone" id="rune_earth" draggable="true" onclick="selectRune('🌿','Tierra')"
-          style="padding:10px 16px;border:1px solid #3a2d20;background:#060a06;cursor:pointer;font-size:1.4rem;transition:all 0.2s;"
-          onmouseover="this.style.borderColor='var(--blood)'" onmouseout="this.style.borderColor='#3a2d20'">
-          🌿 <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);vertical-align:middle;">Tierra</span>
-        </div>
-        <div class="rune-stone" id="rune_wind" draggable="true" onclick="selectRune('💨','Viento')"
-          style="padding:10px 16px;border:1px solid #3a2d20;background:#08080a;cursor:pointer;font-size:1.4rem;transition:all 0.2s;"
-          onmouseover="this.style.borderColor='var(--blood)'" onmouseout="this.style.borderColor='#3a2d20'">
-          💨 <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);vertical-align:middle;">Viento</span>
-        </div>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.88rem;margin-bottom:16px;">Selecciona una runa, luego haz clic en su posición en el círculo.</p>
+      <div style="display:flex;gap:10px;justify-content:center;margin-bottom:20px;flex-wrap:wrap;">
+        ${[['🔥','Fuego'],['💧','Agua'],['🌿','Tierra'],['💨','Viento']].map(([e,n])=>`
+          <div onclick="selectRune('${e}','${n}')" style="padding:10px 14px;border:1px solid #3a2d20;background:#0e0804;cursor:pointer;font-size:1.3rem;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--blood)'" onmouseout="this.style.borderColor='#3a2d20'">
+            ${e} <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-dim);vertical-align:middle;">${n}</span>
+          </div>`).join('')}
       </div>
-
-      <!-- Círculo de posiciones (N, E, S, O) -->
       <div style="position:relative;width:220px;height:220px;margin:0 auto 20px;">
-        <!-- Círculo decorativo -->
-        <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:0.3" viewBox="0 0 220 220">
-          <circle cx="110" cy="110" r="100" fill="none" stroke="#8b0000" stroke-width="1" stroke-dasharray="4,4"/>
-          <circle cx="110" cy="110" r="70" fill="none" stroke="#3a2d20" stroke-width="1"/>
-          <line x1="110" y1="10" x2="110" y2="210" stroke="#2a1e14" stroke-width="0.5"/>
-          <line x1="10" y1="110" x2="210" y2="110" stroke="#2a1e14" stroke-width="0.5"/>
+        <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:0.2" viewBox="0 0 220 220">
+          <circle cx="110" cy="110" r="100" fill="none" stroke="#8b0000" stroke-width="1" stroke-dasharray="6,4"/>
+          <circle cx="110" cy="110" r="72" fill="none" stroke="#3a2d20" stroke-width="1"/>
+          <line x1="110" y1="10" x2="110" y2="210" stroke="#1a1010" stroke-width="0.5"/>
+          <line x1="10" y1="110" x2="210" y2="110" stroke="#1a1010" stroke-width="0.5"/>
         </svg>
-        <!-- Norte (arriba) = Fuego -->
-        <div style="position:absolute;top:5px;left:50%;transform:translateX(-50%);">
-          <div id="slot_norte" class="rune-slot" onclick="placeSelectedRune('norte')" style="font-size:1.5rem;">
-            ${STATE.ritualSlots[0] || '<span style="color:#2a1e14;font-size:0.8rem;">N</span>'}
-          </div>
-        </div>
-        <!-- Este (derecha) = Agua -->
-        <div style="position:absolute;right:5px;top:50%;transform:translateY(-50%);">
-          <div id="slot_este" class="rune-slot" onclick="placeSelectedRune('este')" style="font-size:1.5rem;">
-            ${STATE.ritualSlots[1] || '<span style="color:#2a1e14;font-size:0.8rem;">E</span>'}
-          </div>
-        </div>
-        <!-- Sur (abajo) = Tierra -->
-        <div style="position:absolute;bottom:5px;left:50%;transform:translateX(-50%);">
-          <div id="slot_sur" class="rune-slot" onclick="placeSelectedRune('sur')" style="font-size:1.5rem;">
-            ${STATE.ritualSlots[2] || '<span style="color:#2a1e14;font-size:0.8rem;">S</span>'}
-          </div>
-        </div>
-        <!-- Oeste (izquierda) = Viento -->
-        <div style="position:absolute;left:5px;top:50%;transform:translateY(-50%);">
-          <div id="slot_oeste" class="rune-slot" onclick="placeSelectedRune('oeste')" style="font-size:1.5rem;">
-            ${STATE.ritualSlots[3] || '<span style="color:#2a1e14;font-size:0.8rem;">O</span>'}
-          </div>
-        </div>
+        <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);"><div id="slot_norte" class="rune-slot" onclick="placeRune('norte')" style="font-size:1.4rem;">${STATE.ritualSlots[0]||'<span style="color:#2a1e14;font-size:0.75rem;font-family:var(--font-mono)">N</span>'}</div></div>
+        <div style="position:absolute;right:6px;top:50%;transform:translateY(-50%);"><div id="slot_este" class="rune-slot" onclick="placeRune('este')" style="font-size:1.4rem;">${STATE.ritualSlots[1]||'<span style="color:#2a1e14;font-size:0.75rem;font-family:var(--font-mono)">E</span>'}</div></div>
+        <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);"><div id="slot_sur" class="rune-slot" onclick="placeRune('sur')" style="font-size:1.4rem;">${STATE.ritualSlots[2]||'<span style="color:#2a1e14;font-size:0.75rem;font-family:var(--font-mono)">S</span>'}</div></div>
+        <div style="position:absolute;left:6px;top:50%;transform:translateY(-50%);"><div id="slot_oeste" class="rune-slot" onclick="placeRune('oeste')" style="font-size:1.4rem;">${STATE.ritualSlots[3]||'<span style="color:#2a1e14;font-size:0.75rem;font-family:var(--font-mono)">O</span>'}</div></div>
       </div>
-
-      <p id="selectedRune" style="font-family:var(--font-mono);font-size:0.75rem;color:var(--candle);text-align:center;min-height:20px;"></p>
+      <p id="selectedRuneLabel" style="font-family:var(--font-mono);font-size:0.75rem;color:var(--candle);text-align:center;min-height:20px;"></p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
         <button class="action-btn primary-btn" onclick="checkRitual()">COMPLETAR RITUAL</button>
-        <button class="action-btn" onclick="resetRitual()" style="font-size:0.75rem;padding:6px 20px;">Limpiar círculo</button>
+        <button class="action-btn" onclick="resetRitual()" style="font-size:0.7rem;padding:6px 18px;">Limpiar círculo</button>
         <div class="feedback-msg" id="ritualFeedback"></div>
-        <div class="attempt-dots" data-dots="ritual3">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="ritual3">${dotRow(5)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
+  setTimeout(()=>playChurch(), 3500);
 }
-
-let selectedRune = null;
-function selectRune(emoji, name) {
-  selectedRune = emoji;
-  const el = document.getElementById('selectedRune');
-  if (el) el.textContent = `Seleccionado: ${emoji} ${name}`;
-  playTone(440, 0.1, 'triangle', 0.04);
-}
-
-function placeSelectedRune(position) {
-  if (!selectedRune) { giveHint(3, 0); return; }
-  const posMap = { norte: 0, este: 1, sur: 2, oeste: 3 };
-  const slotId = `slot_${position}`;
-  const idx = posMap[position];
-  STATE.ritualSlots[idx] = selectedRune;
-  const el = document.getElementById(slotId);
-  if (el) {
-    el.textContent = selectedRune;
-    el.classList.add('placed');
-  }
-  playTone(300 + idx * 80, 0.15, 'sine', 0.05);
-  selectedRune = null;
-  document.getElementById('selectedRune').textContent = '';
-}
-
-function resetRitual() {
-  STATE.ritualSlots = ['', '', '', ''];
-  renderPhase3();
-}
-
-function checkRitual() {
-  // Correcto: Norte=🔥, Este=💧, Sur=🌿, Oeste=💨
-  const correct = ['🔥', '💧', '🌿', '💨'];
-  if (!STATE.attempts['ritual3']) STATE.attempts['ritual3'] = 0;
-  STATE.attempts['ritual3']++;
-
-  const isCorrect = STATE.ritualSlots.every((r, i) => r === correct[i]);
-  const feedback = document.getElementById('ritualFeedback');
-  markAttemptDots('ritual3');
-
-  if (isCorrect) {
-    feedback.className = 'feedback-msg success show';
-    feedback.textContent = '...el sello de cera se derrite. Un olor a azufre llena la capilla.';
-    STATE.solved['ritual3'] = true;
-    playUnlock();
-    // Efecto visual
-    setTimeout(() => {
-      addItem('sello_olmedo');
-      advancePhase();
-    }, 2000);
+let selectedRune=null;
+function selectRune(e,n){ selectedRune=e; document.getElementById('selectedRuneLabel').textContent=`Seleccionado: ${e} ${n}`; playTone(440,0.1,'triangle',0.04); }
+function placeRune(pos){ if(!selectedRune){ giveHint(3,0); return; } const map={norte:0,este:1,sur:2,oeste:3}; STATE.ritualSlots[map[pos]]=selectedRune; const el=document.getElementById(`slot_${pos}`); if(el){ el.textContent=selectedRune; el.classList.add('placed'); } playTone(300+map[pos]*80,0.15,'sine',0.05); selectedRune=null; document.getElementById('selectedRuneLabel').textContent=''; }
+function resetRitual(){ STATE.ritualSlots=['','','','']; renderPhase3(); }
+function checkRitual(){
+  if(STATE.solved['ritual3']) return;
+  const correct=['🔥','💧','🌿','💨'];
+  if(!STATE.attempts['ritual3']) STATE.attempts['ritual3']=0; STATE.attempts['ritual3']++;
+  markDots('ritual3'); const fb=document.getElementById('ritualFeedback');
+  if(STATE.ritualSlots.every((r,i)=>r===correct[i])){
+    STATE.solved['ritual3']=true; fb.className='feedback-msg success show'; fb.textContent='...el sello de cera se derrite. Un olor a azufre llena la capilla.';
+    playUnlock(); setTimeout(()=>{ addItem('sello_olmedo'); advancePhase(); },2000);
   } else {
-    feedback.className = 'feedback-msg error show';
-    feedback.textContent = getErrorMessage(STATE.attempts['ritual3']);
-    playWrong();
-    if (STATE.attempts['ritual3'] >= 3) triggerHintByFailure(3);
-    STATE.score = Math.max(0, STATE.score - 3);
+    fb.className='feedback-msg error show'; fb.textContent=getEMsg(STATE.attempts['ritual3']); playWrong();
+    if(STATE.attempts['ritual3']>=3) triggerHintByFailure(3);
+    if(STATE.attempts['ritual3']>=3&&Math.random()<0.4) setTimeout(()=>triggerScreamer(),700);
+    STATE.score=Math.max(0,STATE.score-3);
   }
 }
 
-// ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // FASE 4: COCINA
-// Puzzle: Contar ingredientes en receta → 374
-// ──────────────────────────────────────────────
-function renderPhase4() {
-  const canvas = document.getElementById('gameCanvas');
-  canvas.innerHTML = `
-    <div class="phase-indicator">
-      ${Array.from({length:6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel candle-effect" data-room="COCINA · PLANTA BAJA">
+// ═══════════════════════════════════════════════
+function renderPhase4(){
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(4)}
+    <div class="narrative-panel" data-room="COCINA · PLANTA BAJA" style="border-left-color:#5a2a00;background:rgba(16,8,2,0.85);">
       <p class="narrative-text">
-        La cocina huele a algo quemado. Hace décadas que no se cocina aquí, pero
-        <em>la hornilla del centro está caliente.</em><br><br>
-        Sobre la mesa de madera, un <em>libro de recetas</em> abierto. La página está manchada,
-        pero legible. Algo se ha cocido en esta cocina que no era comida.<br><br>
-        Una <span class="disturbing">puerta de madera reforzada</span> lleva al sótano.
-        Hay una rueda con números. La combinación correcta la guarda la receta.
+        Décadas sin usarse, pero <em>la hornilla central está caliente.</em><br><br>
+        Sobre la mesa, un libro de recetas abierto en una página manchada.
+        Lo que se cocinaba aquí no era comida.<br><br>
+        Una <span class="disturbing">puerta reforzada</span> conduce al sótano.
+        Una rueda numerada bloquea el paso. La combinación la guarda la receta.
       </p>
     </div>
-
-    <div class="document-card">
+    <div style="width:100%;padding:16px;background:rgba(6,3,1,0.85);border:1px solid #1e0e04;display:flex;align-items:flex-end;justify-content:center;gap:16px;height:70px;position:relative;overflow:hidden;margin-bottom:12px;">
+      ${[0,1,2,3].map(i=>`<div style="width:4px;height:55px;background:linear-gradient(0deg,transparent 0%,rgba(190,160,120,0.12) 40%,rgba(200,170,130,0.08) 70%,transparent 100%);animation:steam-rise ${1.4+i*0.35}s ease-in-out infinite ${i*0.45}s;transform-origin:bottom;"></div>`).join('')}
+      <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:130px;height:10px;background:rgba(70,35,8,0.7);border-radius:2px;box-shadow:0 0 12px rgba(180,90,10,0.3);"></div>
+    </div>
+    <div class="document-card" style="border-color:#3a1a00;">
       <div class="document-header">LIBRO DE RECETAS DE ROSARIO OLMEDO · 1945</div>
-      <div class="document-body" style="line-height:2.3;">
+      <div class="document-body" style="line-height:2.2;">
 <span style="color:var(--bone);font-size:1rem;font-family:var(--font-title);">Estofado para los que no duermen</span>
 
 <strong style="color:var(--candle);">Paso 1 — Preparación:</strong>
 Agua de pozo (sin tocar luz solar),
-huesos de animal (no preguntes cuáles),
+huesos de animal,
 sal gruesa de mar.
-<em style="color:var(--text-dim);">— 3 ingredientes</em>
 
 <strong style="color:var(--candle);">Paso 2 — El cuerpo:</strong>
 Raíz de belladona fresca,
@@ -989,311 +645,163 @@ grasa de vela negra,
 hilo rojo sin tejer,
 plumas de cuervo (exactamente 7),
 una moneda de los muertos.
-<em style="color:var(--text-dim);">— 7 ingredientes</em>
 
 <strong style="color:var(--candle);">Paso 3 — El sellado:</strong>
 Una gota de sangre del que invoca,
 tres vueltas de oración en silencio,
 incienso de mirra,
 cenizas del nombre.
-<em style="color:var(--text-dim);">— 4 ingredientes</em>
 
-<span style="color:var(--text-dim);font-size:0.85rem;font-style:italic;">
-"Cocinar siguiendo cada paso en orden.
-El número de ingredientes de cada paso, en ese orden,
-abre lo que no debe abrirse."
-</span>
+<span style="color:var(--text-dim);font-size:0.82rem;font-style:italic;">"Cocinar en orden. El número de ingredientes de cada paso, en ese orden, abre lo que no debe abrirse."</span>
       </div>
     </div>
-
-    <div class="puzzle-container">
+    <div class="puzzle-container" style="border-color:#3a1a00;">
       <div class="puzzle-title"><span class="puzzle-icon">🚪</span>Rueda de Combinación — Puerta al Sótano</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        Tres dígitos. El número de ingredientes de cada paso, en orden.
-      </p>
+      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">Tres dígitos: ingredientes del paso 1, paso 2, paso 3.</p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-        <input type="text"
-               class="game-input"
-               id="recipeInput"
-               placeholder="_ _ _"
-               maxlength="5"
-               autocomplete="off"
-               onkeyup="if(event.key==='Enter')checkRecipePuzzle()" />
-        <button class="action-btn primary-btn" onclick="checkRecipePuzzle()">ABRIR PUERTA</button>
+        <input type="text" class="game-input" id="recipeInput" placeholder="_ _ _" maxlength="5" autocomplete="off" onkeyup="if(event.key==='Enter')checkRecipe()"/>
+        <button class="action-btn primary-btn" onclick="checkRecipe()">ABRIR PUERTA</button>
         <div class="feedback-msg" id="recipeFeedback"></div>
-        <div class="attempt-dots" data-dots="recipe4">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="recipe4">${dotRow(5)}</div>
       </div>
     </div>
-
-    ${hasItem('carta_oculta') ? `
-    <div class="document-card" style="border-color:rgba(139,0,0,0.4);">
-      <div class="document-header">CARTA OCULTA — RELEÍDA</div>
-      <div class="document-body" style="font-style:italic;">
-"Si lees esto, ya es tarde para mí.
-El sótano. El número es el año en que todo terminó.
-No te quedes después de medianoche.
-<span class='disturbing'>Ella todavía está ahí abajo.</span>"
-      </div>
-    </div>` : ''}
-  `;
+    ${hasItem('carta_oculta')?`<div class="document-card" style="border-color:rgba(139,0,0,0.4);background:rgba(14,3,3,0.85);"><div class="document-header">CARTA OCULTA — RELEÍDA</div><div class="document-body" style="font-style:italic;color:rgba(200,140,140,0.8);">"Si lees esto, ya es tarde para mí. El sótano. El número es el año en que todo terminó. No te quedes después de medianoche. <span class='disturbing'>Ella todavía está ahí abajo.</span>"</div></div>`:''}`;
 }
+function checkRecipe(){ checkAnswer('recipeInput','recipeFeedback','374',()=>{ addItem('llave_sotano'); setTimeout(advancePhase,1500); },'recipe4'); }
 
-function checkRecipePuzzle() {
-  checkAnswer('recipeInput', 'recipeFeedback', '374', () => {
-    addItem('llave_sotano');
-    setTimeout(() => advancePhase(), 1500);
-  }, 'recipe4');
-}
-
-// ──────────────────────────────────────────────
-// FASE 5: EL SÓTANO
-// Puzzle final: Código 1947 en 4 dígitos
-// ──────────────────────────────────────────────
-function renderPhase5() {
-  STATE.lockDigits = [0, 0, 0, 0];
-  const canvas = document.getElementById('gameCanvas');
-
-  // Evento especial: susto narrativo
-  setTimeout(() => {
-    const overlay = document.getElementById('scareOverlay');
-    overlay.classList.add('active');
-    document.getElementById('scareText').textContent = 'ELLA TE ESTÁ MIRANDO';
-    setTimeout(() => overlay.classList.remove('active'), 2000);
-    playTone(80, 1.5, 'sawtooth', 0.08);
-  }, 3000);
-
-  canvas.innerHTML = `
-    <div class="phase-indicator">
-      ${Array.from({length:6}, (_,i) =>
-        `<div class="phase-dot ${i < STATE.phase ? 'done' : i === STATE.phase ? 'active' : ''}"></div>`
-      ).join('')}
-    </div>
-
-    <div class="narrative-panel" data-room="SÓTANO SELLADO · BAJO TIERRA" style="border-left-color:var(--blood-light);animation:none;">
-      <p class="narrative-text" style="color:rgba(200,184,154,0.9);">
-        Las escaleras bajan hacia una oscuridad total. El único foco de luz eres tú.<br><br>
-        El sótano es grande. Mucho más grande de lo que debería ser.<br><br>
-        <span class="disturbing">En las paredes hay marcas. Marcas de uñas.</span>
-        En el centro, una silla con correas de cuero. La silla mira hacia la pared.<br><br>
-        Y en la pared, grabado en la piedra con dedos humanos, una y otra vez:<br>
-        <span class="disturbing" style="font-size:1.1rem;letter-spacing:0.1em;">
-          SACADME · SACADME · SACADME · SACADME · SACADME
-        </span><br><br>
-        Al fondo: una <em>puerta de hierro</em>. La salida. Con un panel de 4 dígitos.<br><br>
-        Hay algo detrás de ti. No te des la vuelta.
+// ═══════════════════════════════════════════════
+// FASE 5: SÓTANO — CLÍMAX
+// ═══════════════════════════════════════════════
+function renderPhase5(){
+  STATE.lockDigits=[0,0,0,0];
+  document.getElementById('gameCanvas').innerHTML=`
+    ${phaseDots(5)}
+    <div class="narrative-panel" data-room="SÓTANO SELLADO · BAJO TIERRA" style="border:1px solid rgba(139,0,0,0.4);border-left:3px solid #c0392b;background:rgba(18,2,2,0.95);">
+      <p class="narrative-text" style="color:rgba(225,195,180,0.95);">
+        Las escaleras descienden hacia la nada.<br><br>
+        El sótano es <em>grande. Demasiado grande</em> para lo que debería ser.<br><br>
+        <span class="disturbing">En las paredes: marcas de uñas.</span> Largas. Profundas. Recientes.<br><br>
+        En el centro, una silla con correas de cuero. Mira hacia la pared donde alguien escribió una y otra vez:
+        <span class="disturbing" style="font-size:1rem;display:block;margin-top:10px;letter-spacing:0.15em;line-height:2.2;">SACADME · SACADME · SACADME · SACADME · SACADME</span>
+        <br>Al fondo: la <em>puerta de hierro</em>. La salida.<br><br>
+        <span style="color:#c0392b;font-style:normal;">Hay algo detrás de ti. No te des la vuelta.</span>
       </p>
     </div>
+    <div style="width:100%;padding:10px 16px;background:rgba(6,1,1,0.95);border:1px solid rgba(60,0,0,0.4);text-align:center;font-family:var(--font-mono);font-size:0.68rem;letter-spacing:0.28em;color:rgba(120,0,0,0.35);animation:wall-text-pulse 3.5s ease-in-out infinite;margin-bottom:12px;">
+      SACADME&nbsp;·&nbsp;SACADME&nbsp;·&nbsp;SACADME&nbsp;·&nbsp;SACADME&nbsp;·&nbsp;SACADME
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;margin-bottom:16px;">
+      <div class="document-card" style="border-color:#3a0606;">
+        <div class="document-header">LA VOZ DEL PUEBLO · 12·XI·1947</div>
+        <div class="document-body" style="font-size:0.84rem;line-height:1.95;">
+<span class="key-word" style="font-size:0.95rem;">DESAPARECE LA FAMILIA OLMEDO</span>
+Sin rastro. Sin explicación.
 
-    <!-- Documentos que ayudan a descifrar 1947 -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;">
-      <div class="document-card">
-        <div class="document-header">TITULARES DE PRENSA · 1947</div>
-        <div class="document-body" style="font-size:0.85rem;line-height:1.9;">
-<span class="key-word">LA VOZ DEL PUEBLO</span>
-12 de noviembre, <span class="key-word">1947</span>
+Autoridades cierran el caso.
+La mansión, clausurada.
 
-"DESAPARECE FAMILIA OLMEDO
- — SIN RASTRO, SIN EXPLICACIÓN"
-
-Las autoridades cierran el caso.
-La mansión, abandonada.
-El año: <span class="key-word" style="font-size:1.1rem;">1947</span>.
+El año: <span class="key-word" style="font-size:1.3rem;font-weight:bold;">1947</span>
         </div>
       </div>
-      <div class="diary-entry" style="font-size:0.85rem;">
-        <div class="diary-date">ÚLTIMA PÁGINA DEL DIARIO</div>
-"Esta es mi última nota.
-Si alguien la encuentra, escucha:
+      <div class="diary-entry" style="font-size:0.85rem;background:rgba(14,2,2,0.95);">
+        <div class="diary-date" style="color:#c0392b;">ÚLTIMA PÁGINA · SIN FECHA</div>
+Esta es mi última nota.
 
-El código de salida es el año.
-El año en que todo terminó.
-En que yo terminé.
+El código de salida
+es el año.
+El año en que
+yo terminé.
 
-No olvides: <span class='key-word'>1947</span>.
-Escápate. Por favor."
+<span class='key-word' style='font-size:1.35rem;'>1947.</span>
+
+Escápate.
+Por favor.
 
 — R.O.
       </div>
     </div>
-
-    <div class="puzzle-container" style="border-color:rgba(139,0,0,0.5);">
-      <div class="puzzle-title" style="color:var(--blood-light);"><span class="puzzle-icon">🚪</span>Puerta de Hierro — La Salida</div>
-      <p style="font-family:var(--font-body);font-style:italic;color:var(--text-dim);font-size:0.9rem;margin-bottom:16px;">
-        El año en que la familia Olmedo desapareció. Cuatro dígitos.
-        Sientes pasos detrás de ti. Rápido.
-      </p>
-
+    <div class="puzzle-container" style="border:2px solid rgba(139,0,0,0.55);background:rgba(14,2,2,0.97);">
+      <div class="puzzle-title" style="color:var(--blood-light);"><span class="puzzle-icon">🚪</span>Puerta de Hierro — La Única Salida</div>
+      <p style="font-family:var(--font-body);font-style:italic;color:rgba(180,110,110,0.85);font-size:0.9rem;margin-bottom:16px;">El año en que la familia Olmedo desapareció. Escuchas pasos. Date prisa.</p>
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-        <div style="display:flex;gap:8px;margin-bottom:8px;">
-          ${STATE.lockDigits.map((d,i) =>
-            `<div class="lock-digit" id="finalD${i}" onclick="cycleFinalDigit(${i})" style="width:60px;height:80px;font-size:2.2rem;">${d}</div>`
-          ).join('')}
-        </div>
-        <p style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);">← Haz clic para cambiar · Pulsa rápido</p>
-        <button class="action-btn primary-btn" onclick="checkFinalCode()" style="border-color:var(--blood-light);color:var(--blood-light);font-size:1rem;padding:14px 40px;">
-          ABRIR LA PUERTA
-        </button>
+        <div style="display:flex;gap:8px;">${STATE.lockDigits.map((d,i)=>`<div class="lock-digit" id="finalD${i}" onclick="cycleFinal(${i})" style="width:64px;height:84px;font-size:2.5rem;border-color:rgba(139,0,0,0.4);">${d}</div>`).join('')}</div>
+        <p style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-dim);">← haz clic para girar</p>
+        <button class="action-btn primary-btn" id="finalBtn" onclick="checkFinal()" style="border-color:var(--blood-light);color:var(--blood-light);font-size:1rem;padding:14px 42px;animation:final-btn-pulse 1.5s ease-in-out infinite;">ABRIR LA PUERTA</button>
         <div class="feedback-msg" id="finalFeedback"></div>
-        <div class="attempt-dots" data-dots="final5">
-          ${Array.from({length:5},()=>'<div class="attempt-dot"></div>').join('')}
-        </div>
+        <div class="attempt-dots" data-dots="final5">${dotRow(5)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
+  setTimeout(()=>triggerScreamer('ELLA TE VE'),4500);
+  setTimeout(()=>{ playDoorSlam(); showMessage('ALGO','NO SALDRÁS. NADIE SALE JAMÁS.',400); },22000);
 }
-
-function cycleFinalDigit(index) {
-  STATE.lockDigits[index] = (STATE.lockDigits[index] + 1) % 10;
-  const el = document.getElementById(`finalD${index}`);
-  if (el) el.textContent = STATE.lockDigits[index];
-  playTone(300 + index * 50, 0.08, 'triangle', 0.04);
-}
-
-function checkFinalCode() {
-  const code = STATE.lockDigits.join('');
-  if (!STATE.attempts['final5']) STATE.attempts['final5'] = 0;
-  STATE.attempts['final5']++;
-  const feedback = document.getElementById('finalFeedback');
-  markAttemptDots('final5');
-
-  if (code === '1947') {
-    STATE.solved['final5'] = true;
-    STATE.lockDigits.forEach((_,i) => {
-      document.getElementById(`finalD${i}`)?.classList.add('open');
-    });
-    feedback.className = 'feedback-msg success show';
-    feedback.textContent = '...la puerta se abre con un gemido metálico. Aire frío. Libertad.';
-    playUnlock();
-    setTimeout(() => triggerVictory(), 2500);
+function cycleFinal(i){ if(STATE.solved['final5']) return; STATE.lockDigits[i]=(STATE.lockDigits[i]+1)%10; const el=document.getElementById(`finalD${i}`); if(el) el.textContent=STATE.lockDigits[i]; playTone(260+i*40,0.08,'triangle',0.04); }
+function checkFinal(){
+  if(STATE.solved['final5']) return;
+  const code=STATE.lockDigits.join('');
+  if(!STATE.attempts['final5']) STATE.attempts['final5']=0; STATE.attempts['final5']++;
+  markDots('final5'); const fb=document.getElementById('finalFeedback');
+  const msgs=['Incorrecto. Algo se mueve en la oscuridad.','No es eso. Los pasos se acercan.','Fallo. La vela se apaga.','Incorrecto. La respiración detrás es más cercana.','ERROR. YA NO HAY TIEMPO.'];
+  if(code==='1947'){
+    STATE.solved['final5']=true;
+    document.getElementById('finalBtn').disabled=true;
+    STATE.lockDigits.forEach((_,i)=>document.getElementById(`finalD${i}`)?.classList.add('open'));
+    fb.className='feedback-msg success show'; fb.textContent='...la puerta de hierro gime. Aire frío. Luz. Libertad.';
+    playUnlock(); setTimeout(triggerVictory,2800);
   } else {
-    feedback.className = 'feedback-msg error show';
-    const msgs = [
-      'Incorrecto. Algo se mueve en la oscuridad.',
-      'No es eso. Los pasos se acercan.',
-      'Fallo. La vela se apaga un momento.',
-      'Incorrecto. La respiración detrás de ti es más cercana.',
-      'ERROR. YA NO HAY TIEMPO.',
-    ];
-    feedback.textContent = msgs[Math.min(STATE.attempts['final5']-1, msgs.length-1)];
-    playWrong();
-    if (STATE.attempts['final5'] >= 2) triggerHintByFailure(5);
-    STATE.lockDigits.forEach((_,i) => {
-      const el = document.getElementById(`finalD${i}`);
-      el?.classList.add('locked');
-      setTimeout(() => el?.classList.remove('locked'), 500);
-    });
-    STATE.score = Math.max(0, STATE.score - 5);
-
-    // Susto en el último intento fallido
-    if (STATE.attempts['final5'] >= 4) {
-      setTimeout(() => {
-        const overlay = document.getElementById('scareOverlay');
-        overlay.classList.add('active');
-        document.getElementById('scareText').textContent = '¡CORRE!';
-        setTimeout(() => overlay.classList.remove('active'), 1500);
-        playTone(60, 0.8, 'sawtooth', 0.1);
-      }, 300);
-    }
+    fb.className='feedback-msg error show'; fb.textContent=msgs[Math.min(STATE.attempts['final5']-1,msgs.length-1)]; playWrong();
+    STATE.lockDigits.forEach((_,i)=>{ const el=document.getElementById(`finalD${i}`); el?.classList.add('locked'); setTimeout(()=>el?.classList.remove('locked'),500); });
+    if(STATE.attempts['final5']>=2) triggerHintByFailure(5);
+    if(STATE.attempts['final5']>=3) setTimeout(()=>triggerScreamer('¡CORRE!'),500);
+    STATE.score=Math.max(0,STATE.score-5);
   }
 }
 
-// ──────────────────────────────────────────────
-// FIN DEL JUEGO
-// ──────────────────────────────────────────────
-function triggerVictory() {
-  clearInterval(STATE.timerInterval);
-  clearInterval(STATE.ambientInterval);
-
-  const elapsed = Math.floor((Date.now() - STATE.startTime) / 1000);
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-
-  // Calcular puntuación final
-  let finalScore = STATE.score;
-  if (STATE.timerSeconds > 60 * 60) finalScore += 30;      // Bonus tiempo rápido
-  else if (STATE.timerSeconds > 30 * 60) finalScore += 15; // Buen tiempo
-
-  const screen = document.getElementById('endgameScreen');
-  screen.style.display = 'flex';
-  document.getElementById('endTitle').className = 'endgame-title escaped';
-  document.getElementById('endTitle').textContent = 'Escapaste';
-  document.getElementById('endText').innerHTML = `
-    Saliste de la Mansión Olmedo.<br><br>
-    Ahora sabes la verdad: Rosario Olmedo fue encerrada por su propia familia.
-    La llamaban "la cuarta". Decían que era diferente.<br><br>
-    Lo que hizo su padre en ese sótano nunca debería repetirse.<br><br>
-    <em style="color:var(--text-dim);">Gracias a ti, al menos alguien lo sabe.</em>
-  `;
-  document.getElementById('endScore').innerHTML = `
-    TIEMPO: ${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')} &nbsp;·&nbsp;
-    PUNTUACIÓN: ${finalScore}/100 &nbsp;·&nbsp;
-    PISTAS USADAS: ${Object.values(STATE.hintsGiven).reduce((a,b)=>a+b,0)} &nbsp;·&nbsp;
-    INTENTOS TOTALES: ${Object.values(STATE.attempts).reduce((a,b)=>a+b,0)}
-  `;
-
-  // Guardar en localStorage
-  const record = { score: finalScore, time: `${minutes}:${seconds}`, date: new Date().toLocaleDateString() };
-  try { localStorage.setItem('olmedo_record', JSON.stringify(record)); } catch(e){}
-
+// ─── FIN ───
+function triggerVictory(){
+  clearInterval(STATE.timerInterval); clearInterval(STATE.ambientInterval);
+  const el=Math.floor((Date.now()-STATE.startTime)/1000), m=Math.floor(el/60), s=el%60;
+  let score=STATE.score+(STATE.timerSeconds>60*60?30:STATE.timerSeconds>30*60?15:0);
+  const sc=document.getElementById('endgameScreen'); sc.style.display='flex';
+  document.getElementById('endTitle').className='endgame-title escaped';
+  document.getElementById('endTitle').textContent='Escapaste.';
+  document.getElementById('endText').innerHTML=`Saliste de la Mansión Olmedo.<br><br>Ahora conoces la verdad: Rosario fue encerrada por su propia familia. La llamaban "la cuarta". Decían que era diferente, que no debía existir.<br><br>Lo que su padre hizo en ese sótano nunca debería repetirse.<br><br><em style="color:var(--text-dim);">Gracias a ti, al menos alguien lo sabe.</em>`;
+  document.getElementById('endScore').innerHTML=`TIEMPO: ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} &nbsp;·&nbsp; PUNTUACIÓN: ${score}/100 &nbsp;·&nbsp; PISTAS: ${Object.values(STATE.hintsGiven).reduce((a,b)=>a+b,0)} &nbsp;·&nbsp; INTENTOS: ${Object.values(STATE.attempts).reduce((a,b)=>a+b,0)}`;
   playUnlock();
-  setTimeout(() => { [523,659,784,1047].forEach((f,i) => setTimeout(() => playTone(f,0.5,'triangle',0.06), i*200)); }, 500);
+}
+function triggerGameOver(){
+  clearInterval(STATE.timerInterval); clearInterval(STATE.ambientInterval);
+  triggerScreamer('FIN');
+  setTimeout(()=>{
+    const sc=document.getElementById('endgameScreen'); sc.style.display='flex';
+    document.getElementById('endTitle').className='endgame-title died';
+    document.getElementById('endTitle').textContent='El tiempo se agotó.';
+    document.getElementById('endText').innerHTML=`La oscuridad se cerró sobre ti.<br><br>No todos los que entran salen.<br><br><em style="color:var(--text-dim);">Ahora formas parte de la casa.</em>`;
+    document.getElementById('endScore').innerHTML=`TIEMPO AGOTADO &nbsp;·&nbsp; FASES: ${STATE.phase}/6 &nbsp;·&nbsp; PUNTUACIÓN: ${STATE.score}/100`;
+    playTone(80,5,'sawtooth',0.1);
+  },2600);
 }
 
-function triggerGameOver(reason) {
-  clearInterval(STATE.timerInterval);
-  clearInterval(STATE.ambientInterval);
-
-  const screen = document.getElementById('endgameScreen');
-  screen.style.display = 'flex';
-  document.getElementById('endTitle').className = 'endgame-title died';
-
-  if (reason === 'tiempo') {
-    document.getElementById('endTitle').textContent = 'El tiempo se agotó';
-    document.getElementById('endText').innerHTML = `
-      La oscuridad se cerró sobre ti.<br><br>
-      Llevas demasiado tiempo en la Mansión Olmedo.
-      Lo sabías desde el principio: no todos los que entran salen.<br><br>
-      <em style="color:var(--text-dim);">Ahora formas parte de la casa.</em>
-    `;
-  }
-
-  document.getElementById('endScore').innerHTML = `
-    TIEMPO AGOTADO &nbsp;·&nbsp;
-    FASES COMPLETADAS: ${STATE.phase}/${PHASES.length} &nbsp;·&nbsp;
-    PUNTUACIÓN: ${STATE.score}/100
-  `;
-
-  playTone(100, 3, 'sawtooth', 0.08);
-}
-
-// ──────────────────────────────────────────────
-// INICIALIZACIÓN
-// ──────────────────────────────────────────────
-window.addEventListener('load', () => {
-  // Añadir estilo de glitch al body
-  const style = document.createElement('style');
-  style.textContent = `
-    .glitch-body { animation: body-glitch 0.3s step-end; }
-    @keyframes body-glitch {
-      0%   { filter: none; }
-      20%  { filter: hue-rotate(90deg) invert(0.1); }
-      40%  { filter: none; }
-      60%  { filter: hue-rotate(-90deg) saturate(2); }
-      80%  { filter: none; }
-      100% { filter: none; }
-    }
+// ─── INIT ───
+window.addEventListener('load',()=>{
+  const style=document.createElement('style');
+  style.textContent=`
+    .glitch-body{animation:body-glitch 0.38s step-end forwards;}
+    @keyframes body-glitch{0%{filter:none;transform:none;}15%{filter:hue-rotate(90deg) invert(0.07);transform:translateX(-3px);}30%{filter:none;transform:translateX(2px);}55%{filter:hue-rotate(-80deg) saturate(1.9);transform:translateX(-1px);}75%{filter:brightness(1.4);transform:none;}100%{filter:none;transform:none;}}
+    @keyframes shadow-walk{0%{left:-6%;opacity:0;}10%{opacity:0.55;}48%{left:50%;opacity:0.35;}56%{left:52%;opacity:0;}57%{left:105%;opacity:0;}100%{left:105%;opacity:0;}}
+    @keyframes fall-book{0%,100%{transform:translateY(-45px) rotate(-6deg);opacity:0;}15%,85%{opacity:0.35;}50%{transform:translateY(25px) rotate(6deg);opacity:0.25;}}
+    @keyframes steam-rise{0%,100%{transform:scaleX(1) translateY(0);opacity:0;}20%,80%{opacity:0.9;}50%{transform:scaleX(1.6) translateY(-38px);opacity:0.25;}}
+    @keyframes candle-sway{0%,100%{transform:rotate(-2.5deg);}50%{transform:rotate(2.5deg);}}
+    @keyframes flame-flicker{from{transform:scaleY(1) scaleX(1);opacity:0.9;}to{transform:scaleY(1.35) scaleX(0.75);opacity:0.55;}}
+    @keyframes wall-text-pulse{0%,100%{opacity:0.12;letter-spacing:0.28em;}50%{opacity:0.4;letter-spacing:0.38em;}}
+    @keyframes blink-text{0%,100%{opacity:0.55;}50%{opacity:0.12;}}
+    @keyframes final-btn-pulse{0%,100%{box-shadow:0 0 6px rgba(139,0,0,0.25);}50%{box-shadow:0 0 28px rgba(192,57,43,0.65);}}
+    @keyframes wf{from{opacity:0.9}to{opacity:0}}
   `;
   document.head.appendChild(style);
 
-  // Iniciar sistemas
-  startTimer();
-  startAmbience();
-  renderPhase0();
+  startTimer(); startAmbience(); renderPhase0();
 
-  // Mensaje de bienvenida retrasado
-  setTimeout(() => {
-    showMessage('SISTEMA', 'Conexión activa. Buena suerte... la necesitarás.');
-  }, 5000);
+  setTimeout(()=>showMessage('SISTEMA','Conexión establecida. Buena suerte... la necesitarás.'),4500);
+  setTimeout(()=>playWhisper(),9000);
+  setTimeout(()=>showMessage('DESCONOCIDO','Ya te tenemos.',38000),38000);
 });
