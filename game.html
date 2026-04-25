@@ -1,68 +1,109 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LA CASA OLMEDO — Dentro</title>
-  <link rel="stylesheet" href="style.css" />
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=IM+Fell+English:ital@0;1&family=Special+Elite&display=swap" rel="stylesheet" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>La Casa Olmedo — Dentro</title>
+  <link rel="stylesheet" href="style.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=IM+Fell+English:ital@0;1&family=Special+Elite&display=swap" rel="stylesheet"/>
 </head>
-<body class="game-body">
+<body class="game-body" id="gameBody">
 
-  <div class="noise-overlay"></div>
-  <div class="vignette"></div>
-  <div class="scene-transition" id="sceneTransition"></div>
+<div class="noise-overlay"></div>
+<div class="vignette" id="vignetteEl"></div>
+<div class="scene-transition" id="sceneTransition"></div>
+<div class="brightness-overlay" id="brightnessOverlay"></div>
 
-  <!-- HUD superior -->
-  <div id="gameHUD">
+<!-- HUD -->
+<div id="gameHUD">
+  <div class="hud-timer-wrap">
     <div class="hud-timer" id="hudTimer">90:00</div>
-    <div class="hud-phase-bar">
-      <div class="hud-phase-fill" id="hudPhaseFill" style="width:0%"></div>
-    </div>
-    <div class="hud-phase-label" id="hudPhaseLabel">LA ENTRADA</div>
+    <div class="timer-drips" id="timerDrips"></div>
   </div>
-
-  <!-- Inventario -->
-  <div class="inventory-bar">
-    <div class="inventory-label">Inventario:</div>
-    <div class="inventory-items" id="inventoryItems">
-      <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--text-dim);font-style:italic;">vacío</span>
+  <div class="hud-center">
+    <div class="hud-location" id="hudLocation">HALL DE ENTRADA</div>
+    <div class="hud-mansion-map" id="hudMap">
+      <!-- SVG del mapa generado por JS -->
     </div>
   </div>
-
-  <!-- Pista automática -->
-  <div class="hint-panel" id="hintPanel">
-    <div class="hint-label">⚑ Susurro del pasado</div>
-    <div class="hint-text" id="hintText">...</div>
-  </div>
-
-  <!-- Mensaje entrante -->
-  <div class="incoming-message" id="incomingMsg">
-    <div class="msg-header">
-      <span id="msgFrom">ORIGEN DESCONOCIDO</span>
-      <button class="msg-close" onclick="closeMessage()">✕</button>
+  <div class="hud-right">
+    <div class="hud-score" id="hudScore">100 pts</div>
+    <div class="hud-errors" id="hudErrors">
+      <span class="err-dot"></span><span class="err-dot"></span><span class="err-dot"></span><span class="err-dot"></span><span class="err-dot"></span>
     </div>
-    <div class="msg-body" id="msgBody">...</div>
   </div>
+</div>
 
-  <!-- Overlay de susto -->
-  <div class="scare-overlay" id="scareOverlay">
-    <div id="scareImage" style="display:flex;justify-content:center;max-width:600px;width:100%;"></div>
-    <div class="scare-text" id="scareText"></div>
+<!-- Inventario -->
+<div class="inventory-bar">
+  <div class="inventory-label">Inv:</div>
+  <div class="inventory-items" id="inventoryItems">
+    <span style="font-family:var(--font-mono);font-size:0.68rem;color:var(--text-dim);font-style:italic;">vacío</span>
   </div>
+</div>
 
-  <!-- Canvas principal del juego -->
-  <div id="gameCanvas">
-    <!-- Contenido inyectado por JavaScript -->
+<!-- Panel de pista -->
+<div class="hint-panel" id="hintPanel">
+  <div class="hint-label">⚑ Susurro del pasado</div>
+  <div class="hint-text" id="hintText"></div>
+</div>
+
+<!-- Mensaje entrante -->
+<div class="incoming-message" id="incomingMsg">
+  <div class="msg-header">
+    <span id="msgFrom">ORIGEN DESCONOCIDO</span>
+    <button class="msg-close" onclick="closeMessage()">✕</button>
   </div>
+  <div class="msg-body" id="msgBody"></div>
+</div>
 
-  <!-- Pantalla de fin -->
-  <div id="endgameScreen" style="display:none" class="endgame-screen">
+<!-- Screamer overlay -->
+<div class="scare-overlay" id="scareOverlay">
+  <div id="scareImage"></div>
+  <div class="scare-text" id="scareText"></div>
+</div>
+
+<!-- Canvas del juego -->
+<div id="gameCanvas"></div>
+
+<!-- Pantalla de resultados COMPLETA -->
+<div id="endgameScreen" class="endgame-screen" style="display:none">
+  <div class="end-bg-particles" id="endParticles"></div>
+  <div class="end-content">
+    <div class="end-rank-badge" id="endRankBadge"></div>
     <div class="endgame-title" id="endTitle"></div>
+    <div class="end-stats-grid" id="endStatsGrid"></div>
     <p class="endgame-text" id="endText"></p>
-    <div class="endgame-score" id="endScore"></div>
-    <button class="action-btn" onclick="window.location.href='index.html'">Volver al inicio</button>
+    <!-- Carta de Rosario completa (solo si escapa) -->
+    <div class="carta-completa" id="cartaCompleta" style="display:none">
+      <div class="carta-title">La carta de Rosario · Completa</div>
+      <div class="carta-body">
+Si alguien lee esto, ya es demasiado tarde para mí. Pero quizás no para ti.
+
+Mi padre nos encerró a todos. Decía que yo era "diferente", que traía mal al linaje. La cuarta. Siempre la cuarta.
+
+Lo que hizo en el sótano aquella noche de noviembre de 1947 no tiene nombre. Usó el libro que encontró en la capilla. Usó las runas. Usó a todos nosotros.
+
+Yo fui la única que sobrevivió. Pero sobrevivir aquí dentro no es lo que crees.
+
+Si escapaste, si lograste salir, lleva esto a alguien. Que sepan lo que ocurrió. Que alguien, por fin, lo sepa.
+
+Gracias por no dejarme sola.
+      </div>
+    </div>
+    <!-- Captura de email en resultado -->
+    <div class="end-capture" id="endCapture">
+      <div class="end-capture-label">¿Quieres aparecer en el ranking global?</div>
+      <input type="text" id="endName" class="email-input" placeholder="Tu nombre" maxlength="30" style="margin-bottom:8px;"/>
+      <input type="email" id="endEmail" class="email-input" placeholder="tu@email.com" style="margin-bottom:12px;"/>
+      <button class="action-btn primary-btn" onclick="submitScore()">GUARDAR RESULTADO</button>
+    </div>
+    <div class="end-actions">
+      <button class="action-btn" onclick="shareResult()" style="border-color:var(--candle);color:var(--candle);">↗ COMPARTIR</button>
+      <button class="action-btn" onclick="window.location.href='index.html'">VOLVER AL INICIO</button>
+    </div>
   </div>
+</div>
 
 <script src="script.js"></script>
 </body>
