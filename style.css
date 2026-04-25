@@ -475,3 +475,100 @@ html{scroll-behavior:smooth;}
   .game-input{max-width:220px;}
   .lock-digit{width:44px;height:62px;font-size:1.7rem;}
 }
+
+/* ═══════════════════════════════════════════
+   EFECTOS DE TERROR ADICIONALES v3
+═══════════════════════════════════════════ */
+
+/* Sombra que pasa por las paredes */
+@keyframes wall-shadow-pass {
+  0%   { left:-20%; opacity:0; }
+  5%   { opacity:0.4; }
+  45%  { left:60%; opacity:0.25; }
+  55%  { left:62%; opacity:0; }
+  56%  { left:110%; }
+  100% { left:110%; opacity:0; }
+}
+
+/* Parpadeo de pantalla como fallo eléctrico */
+@keyframes electric-flicker {
+  0%,100% { opacity:1; }
+  92%     { opacity:1; }
+  93%     { opacity:0.3; }
+  94%     { opacity:1; }
+  96%     { opacity:0.6; }
+  97%     { opacity:1; }
+}
+
+/* Efecto de "presencia" — vignette que pulsa */
+.vignette.pulse {
+  animation: vignette-pulse 3s ease-in-out forwards;
+}
+@keyframes vignette-pulse {
+  0%   { background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.95) 100%); }
+  40%  { background: radial-gradient(ellipse at center, transparent 15%, rgba(0,0,0,0.99) 100%); }
+  100% { background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.95) 100%); }
+}
+
+/* Texto rojo que aparece en la pantalla */
+.horror-overlay-text {
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  font-family:'IM Fell English',serif; font-style:italic;
+  font-size:clamp(1.2rem,3vw,1.8rem);
+  color:rgba(139,0,0,0.85); text-align:center;
+  pointer-events:none; z-index:700;
+  text-shadow:0 0 30px rgba(139,0,0,0.6);
+  animation:horror-fade 3s ease forwards;
+}
+@keyframes horror-fade {
+  0%  { opacity:0; transform:translate(-50%,-50%) scale(0.95); letter-spacing:0.5em; }
+  15% { opacity:1; transform:translate(-50%,-50%) scale(1); letter-spacing:0.06em; }
+  75% { opacity:0.9; }
+  100%{ opacity:0; transform:translate(-50%,-50%) scale(1.02); letter-spacing:0.1em; }
+}
+
+/* Líneas de interferencia que cruzan la pantalla */
+@keyframes scan-line {
+  0%   { top:-5%; }
+  100% { top:110%; }
+}
+.scan-line-effect {
+  position:fixed; left:0; right:0; height:3px;
+  background:rgba(139,0,0,0.15);
+  pointer-events:none; z-index:9990;
+  animation:scan-line 2s linear forwards;
+}
+
+/* Efecto de "niebla" que sube desde abajo */
+.fog-rise {
+  position:fixed; bottom:0; left:0; right:0; height:200px;
+  background:linear-gradient(0deg, rgba(20,15,10,0.6) 0%, transparent 100%);
+  pointer-events:none; z-index:20;
+  animation:fog-appear 4s ease-in-out forwards;
+}
+@keyframes fog-appear {
+  0%   { opacity:0; height:0; }
+  30%  { opacity:1; height:200px; }
+  70%  { opacity:0.7; height:180px; }
+  100% { opacity:0; height:160px; }
+}
+
+/* Efecto parpadeo de página completa — como fallo de luz */
+.page-flicker {
+  animation: electric-flicker 0.2s step-end;
+}
+
+/* Figura en la esquina — aparece y desaparece */
+.corner-figure {
+  position:fixed; bottom:70px; right:0;
+  width:80px; opacity:0;
+  pointer-events:none; z-index:590;
+  filter:contrast(2) brightness(0.4);
+  animation:corner-appear 3s ease forwards;
+}
+@keyframes corner-appear {
+  0%  { opacity:0; transform:translateX(100%); }
+  10% { opacity:0.7; transform:translateX(0); }
+  80% { opacity:0.5; }
+  100%{ opacity:0; transform:translateX(20px); }
+}
