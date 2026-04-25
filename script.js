@@ -102,21 +102,333 @@ function playWhisper(){
 }
 
 function playChurch(){
-  [220,330,440].forEach((f,i)=>{ playTone(f,3,'sine',0.025,i*0.5); playTone(f*2,2,'sine',0.012,i*0.5+0.1); });
+  [110,165,220,294].forEach((f,i)=>{ playTone(f,5,'sine',0.018,i*0.6); playTone(f*2,3,'sine',0.009,i*0.6+0.2); });
+}
+
+// ═══════════════════════════════════════════
+// MÚSICA GENERATIVA DE TERROR — MOTOR COMPLETO
+// ═══════════════════════════════════════════
+
+let droneNodes=[], musicPhase=0;
+
+// Drone disonante continuo — la base de todo
+function startDrone(){
+  if(!AC) return; resumeAC();
+  // Dos osciladores ligeramente desafinados crean batido perturbador
+  const freqs=[36.7, 37.1, 55.0, 73.4]; // notas muy graves
+  droneNodes=freqs.map((f,i)=>{
+    try{
+      const o=AC.createOscillator();
+      const g=AC.createGain();
+      const filt=AC.createBiquadFilter();
+      filt.type='lowpass'; filt.frequency.value=200+i*30;
+      o.type=i%2===0?'sawtooth':'sine';
+      o.frequency.value=f;
+      o.connect(filt); filt.connect(g); g.connect(AC.destination);
+      g.gain.setValueAtTime(0,AC.currentTime);
+      g.gain.linearRampToValueAtTime(0.018+i*0.004, AC.currentTime+3);
+      o.start();
+      // Vibrato lento y perturbador
+      const lfo=AC.createOscillator();
+      const lfoG=AC.createGain();
+      lfo.frequency.value=0.08+i*0.03; // muy lento
+      lfoG.gain.value=1.5;
+      lfo.connect(lfoG); lfoG.connect(o.frequency);
+      lfo.start();
+      return {o,g,lfo};
+    }catch(e){ return null; }
+  }).filter(Boolean);
+}
+
+function stopDrone(){
+  droneNodes.forEach(n=>{
+    try{
+      n.g.gain.linearRampToValueAtTime(0,AC.currentTime+2);
+      setTimeout(()=>{ try{n.o.stop();n.lfo.stop();}catch(e){} },2200);
+    }catch(e){}
+  });
+  droneNodes=[];
+}
+
+// Cuerda de violín disonante — un arco que chirría
+function playStringDissonance(){
+  if(!AC) return; resumeAC();
+  try{
+    const dur=3+Math.random()*4;
+    // Ruido filtrado como arco de violín
+    const buf=AC.createBuffer(1,AC.sampleRate*dur,AC.sampleRate);
+    const d=buf.getChannelData(0);
+    for(let i=0;i<d.length;i++){
+      // Ruido + componente sinusoidal = sonido de arco
+      d[i]=(Math.random()*2-1)*0.4 + Math.sin(i*0.08)*0.3 + Math.sin(i*0.113)*0.2;
+    }
+    const src=AC.createBufferSource(); src.buffer=buf;
+    const fil1=AC.createBiquadFilter(); fil1.type='bandpass'; fil1.frequency.value=180+Math.random()*120; fil1.Q.value=4;
+    const fil2=AC.createBiquadFilter(); fil2.type='bandpass'; fil2.frequency.value=320+Math.random()*80; fil2.Q.value=3;
+    const g=AC.createGain(); g.gain.setValueAtTime(0,AC.currentTime);
+    g.gain.linearRampToValueAtTime(0.06,AC.currentTime+0.4);
+    g.gain.linearRampToValueAtTime(0.04,AC.currentTime+dur-0.5);
+    g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+dur);
+    src.connect(fil1); fil1.connect(fil2); fil2.connect(g); g.connect(AC.destination);
+    src.start(); src.stop(AC.currentTime+dur);
+  }catch(e){}
+}
+
+// Respiración perturbadora — inhalación y exhalación
+function playBreathing(){
+  if(!AC) return; resumeAC();
+  try{
+    // Inhalar
+    const buf1=AC.createBuffer(1,AC.sampleRate*1.2,AC.sampleRate);
+    const d1=buf1.getChannelData(0);
+    for(let i=0;i<d1.length;i++) d1[i]=(Math.random()*2-1)*0.5*Math.sin(Math.PI*i/d1.length);
+    const src1=AC.createBufferSource(); src1.buffer=buf1;
+    const fil1=AC.createBiquadFilter(); fil1.type='bandpass'; fil1.frequency.value=800; fil1.Q.value=1.5;
+    const g1=AC.createGain(); g1.gain.value=0.05;
+    src1.connect(fil1); fil1.connect(g1); g1.connect(AC.destination);
+    src1.start();
+
+    // Exhalar (más lento, más grave)
+    setTimeout(()=>{
+      try{
+        const buf2=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate);
+        const d2=buf2.getChannelData(0);
+        for(let i=0;i<d2.length;i++) d2[i]=(Math.random()*2-1)*0.4*(1-i/d2.length);
+        const src2=AC.createBufferSource(); src2.buffer=buf2;
+        const fil2=AC.createBiquadFilter(); fil2.type='bandpass'; fil2.frequency.value=400; fil2.Q.value=1.2;
+        const g2=AC.createGain(); g2.gain.value=0.04;
+        src2.connect(fil2); fil2.connect(g2); g2.connect(AC.destination);
+        src2.start();
+      }catch(e){}
+    },1300);
+  }catch(e){}
+}
+
+// Pasos lentos y pesados — alguien camina en el piso de arriba
+function playFootsteps(){
+  if(!AC) return; resumeAC();
+  const steps=2+Math.floor(Math.random()*4);
+  for(let i=0;i<steps;i++){
+    setTimeout(()=>{
+      try{
+        // Impacto bajo
+        const o=AC.createOscillator(), g=AC.createGain();
+        o.connect(g); g.connect(AC.destination);
+        o.type='sine'; o.frequency.setValueAtTime(80,AC.currentTime); o.frequency.exponentialRampToValueAtTime(30,AC.currentTime+0.3);
+        g.gain.setValueAtTime(0.12,AC.currentTime); g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+0.4);
+        o.start(); o.stop(AC.currentTime+0.5);
+        // Crujido de madera
+        playNoise(0.2,0.08,200);
+      }catch(e){}
+    },i*(600+Math.random()*400));
+  }
+}
+
+// Llanto lejano de niño — el más perturbador
+function playDistantCrying(){
+  if(!AC) return; resumeAC();
+  try{
+    const dur=4;
+    const buf=AC.createBuffer(1,AC.sampleRate*dur,AC.sampleRate);
+    const d=buf.getChannelData(0);
+    // Onda compleja que simula llanto
+    for(let i=0;i<d.length;i++){
+      const t=i/AC.sampleRate;
+      const vibrato=Math.sin(t*6)*0.015;
+      const cry=Math.sin(2*Math.PI*(300+vibrato*100)*t)*0.3
+               +Math.sin(2*Math.PI*(600+vibrato*200)*t)*0.15
+               +Math.sin(2*Math.PI*(900+vibrato*50)*t)*0.08
+               +(Math.random()*2-1)*0.05; // ligero ruido
+      const env=Math.sin(Math.PI*i/d.length)*Math.sin(Math.PI*4*i/d.length+0.5)*0.5+0.5;
+      d[i]=cry*env*0.6;
+    }
+    const src=AC.createBufferSource(); src.buffer=buf;
+    const rev=AC.createConvolver();
+    // Reverb simple con impulso de ruido
+    const revBuf=AC.createBuffer(2,AC.sampleRate*2,AC.sampleRate);
+    for(let ch=0;ch<2;ch++){
+      const rd=revBuf.getChannelData(ch);
+      for(let i=0;i<rd.length;i++) rd[i]=(Math.random()*2-1)*Math.pow(1-i/rd.length,2);
+    }
+    rev.buffer=revBuf;
+    const g=AC.createGain(); g.gain.value=0.035;
+    const dg=AC.createGain(); dg.gain.value=0.02;
+    src.connect(rev); rev.connect(g); g.connect(AC.destination);
+    src.connect(dg); dg.connect(AC.destination);
+    src.start(); src.stop(AC.currentTime+dur);
+  }catch(e){}
+}
+
+// Acorde de piano muerto — tecla vieja que cae sola
+function playDeadPiano(){
+  if(!AC) return; resumeAC();
+  // Notas del acorde de Re menor disminuido (muy ominoso)
+  const notes=[293.7, 349.2, 415.3, 466.2];
+  const chosen=notes.filter(()=>Math.random()<0.6);
+  chosen.forEach((f,i)=>{
+    try{
+      const o=AC.createOscillator(), g=AC.createGain();
+      // Piano sintético: suma de armónicos con decaimiento
+      const g2=AC.createGain();
+      o.connect(g); g.connect(AC.destination);
+      // Segunda armónica (suena más a piano viejo)
+      const o2=AC.createOscillator(), g3=AC.createGain();
+      o2.frequency.value=f*2; o2.type='sine';
+      o2.connect(g3); g3.connect(AC.destination);
+      g3.gain.setValueAtTime(0,AC.currentTime+i*0.08);
+      g3.gain.linearRampToValueAtTime(0.018,AC.currentTime+i*0.08+0.01);
+      g3.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+i*0.08+3);
+      o2.start(AC.currentTime+i*0.08); o2.stop(AC.currentTime+i*0.08+3.5);
+
+      o.type='triangle'; o.frequency.value=f;
+      g.gain.setValueAtTime(0,AC.currentTime+i*0.08);
+      g.gain.linearRampToValueAtTime(0.04,AC.currentTime+i*0.08+0.01);
+      g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+i*0.08+4);
+      o.start(AC.currentTime+i*0.08); o.stop(AC.currentTime+i*0.08+4.5);
+    }catch(e){}
+  });
+}
+
+// Caja de música rota — fragmento de melodía perturbadora
+function playMusicBox(){
+  if(!AC) return; resumeAC();
+  // Melodía pentatónica menor en modo frigio (muy oscura)
+  const melody=[329,311,277,261,220,233,261,246];
+  const chosen=melody.slice(0,3+Math.floor(Math.random()*5));
+  chosen.forEach((f,i)=>{
+    try{
+      const o=AC.createOscillator(), g=AC.createGain();
+      o.connect(g); g.connect(AC.destination);
+      o.type='sine'; o.frequency.value=f*2; // 2 octavas arriba = caja de música
+      const t=AC.currentTime+i*0.22+(Math.random()*0.05);
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(0.05,t+0.01);
+      g.gain.exponentialRampToValueAtTime(0.001,t+0.8);
+      o.start(t); o.stop(t+0.9);
+    }catch(e){}
+  });
+}
+
+// Scratch de violín — chirrido breve y penetrante
+function playViolinScratch(){
+  if(!AC) return; resumeAC();
+  try{
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.connect(g); g.connect(AC.destination);
+    o.type='sawtooth';
+    const f=200+Math.random()*300;
+    o.frequency.setValueAtTime(f,AC.currentTime);
+    o.frequency.linearRampToValueAtTime(f*(0.7+Math.random()*0.6),AC.currentTime+0.15);
+    g.gain.setValueAtTime(0,AC.currentTime);
+    g.gain.linearRampToValueAtTime(0.06,AC.currentTime+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+0.3);
+    o.start(); o.stop(AC.currentTime+0.35);
+    // Segundo chirrido
+    if(Math.random()<0.5){
+      setTimeout(()=>playViolinScratch(),200+Math.random()*300);
+    }
+  }catch(e){}
+}
+
+// Golpe en la pared — algo desde dentro
+function playWallKnock(){
+  if(!AC) return; resumeAC();
+  const times=Math.random()<0.4?3:1;
+  for(let i=0;i<times;i++){
+    setTimeout(()=>{
+      try{
+        const o=AC.createOscillator(), g=AC.createGain();
+        o.connect(g); g.connect(AC.destination);
+        o.type='sine'; o.frequency.setValueAtTime(120,AC.currentTime); o.frequency.exponentialRampToValueAtTime(50,AC.currentTime+0.1);
+        g.gain.setValueAtTime(0.15,AC.currentTime); g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+0.2);
+        o.start(); o.stop(AC.currentTime+0.25);
+        playNoise(0.1,0.12,150);
+      }catch(e){}
+    },i*500);
+  }
+}
+
+// Viento entre grietas — variación más compleja
+function playWind(){
+  if(!AC) return; resumeAC();
+  try{
+    const dur=5+Math.random()*5;
+    const buf=AC.createBuffer(1,AC.sampleRate*dur,AC.sampleRate);
+    const d=buf.getChannelData(0);
+    for(let i=0;i<d.length;i++){
+      d[i]=(Math.random()*2-1)*0.6*(0.5+0.5*Math.sin(Math.PI*4*i/d.length));
+    }
+    const src=AC.createBufferSource(); src.buffer=buf;
+    const fil=AC.createBiquadFilter(); fil.type='bandpass';
+    fil.frequency.value=200+Math.random()*400; fil.Q.value=0.5;
+    const fil2=AC.createBiquadFilter(); fil2.type='highshelf'; fil2.frequency.value=2000; fil2.gain.value=-10;
+    const g=AC.createGain(); g.gain.setValueAtTime(0,AC.currentTime);
+    g.gain.linearRampToValueAtTime(0.03+Math.random()*0.02,AC.currentTime+1.5);
+    g.gain.linearRampToValueAtTime(0.01,AC.currentTime+dur-1);
+    g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+dur);
+    src.connect(fil); fil.connect(fil2); fil2.connect(g); g.connect(AC.destination);
+    src.start(); src.stop(AC.currentTime+dur);
+  }catch(e){}
+}
+
+// ESCALADA DE INTENSIDAD según fase y tiempo
+function getIntensityLevel(){
+  const timeRatio=1-(STATE.timerSeconds/(90*60));
+  const phaseRatio=STATE.phase/6;
+  return Math.min(1,(timeRatio+phaseRatio)/2);
 }
 
 function startAmbience(){
   if(!AC) return;
+  startDrone(); // Drone siempre activo
   let tick=0;
+
   STATE.ambientInterval=setInterval(()=>{
     tick++; resumeAC();
-    if(tick%3===0) playTone(32+Math.random()*18,4+Math.random()*3,'sine',0.01);
-    if(Math.random()<0.13) playDrip();
-    if(Math.random()<0.06) playCreak();
-    if(Math.random()<0.05) playWhisper();
-    if(Math.random()<0.007) playChurch();
+    const intensity=getIntensityLevel();
+
+    // ── SONIDOS BASE (siempre) ──
+    if(tick%5===0) playWind();
+    if(Math.random()<0.10) playDrip();
+
+    // ── CAPA MUSICAL (cada 8-12 segs) ──
+    if(tick%3===0){
+      const r=Math.random();
+      if(r<0.25) playDeadPiano();
+      else if(r<0.45) playMusicBox();
+      else if(r<0.60) playStringDissonance();
+      else if(r<0.70) playChurch();
+    }
+
+    // ── SONIDOS ORGÁNICOS (aleatorios) ──
+    if(Math.random()<0.08) playCreak();
+    if(Math.random()<0.06+intensity*0.08) playBreathing();
+    if(Math.random()<0.04+intensity*0.06) playFootsteps();
+    if(Math.random()<0.03+intensity*0.05) playViolinScratch();
+
+    // ── SONIDOS DE TERROR ESCALANTE ──
+    if(Math.random()<0.015+intensity*0.04) playWallKnock();
+    if(Math.random()<0.012+intensity*0.035) playWhisper();
+    if(Math.random()<0.005+intensity*0.02) playDistantCrying();
+
+    // ── EVENTOS RAROS MUY PERTURBADORES ──
+    if(Math.random()<0.003+intensity*0.008) playChurch();
+
+    // ── ÚLTIMOS MINUTOS: latidos ──
     if(STATE.timerSeconds<600) playHeartbeat(STATE.timerSeconds<180);
-  },3500);
+
+    // ── ESCALADA EXTREMA: últimos 5 minutos ──
+    if(STATE.timerSeconds<300){
+      if(Math.random()<0.15) playViolinScratch();
+      if(Math.random()<0.10) playBreathing();
+      if(Math.random()<0.08) playWallKnock();
+    }
+  },3000); // Cada 3 segundos (más frecuente que antes)
+
+  // Eventos de música especiales en momentos clave
+  setTimeout(()=>{ playDeadPiano(); playDistantCrying(); },8000);
+  setTimeout(()=>{ playMusicBox(); },25000);
+  setTimeout(()=>{ playStringDissonance(); playViolinScratch(); },55000);
 }
 
 // ─── SCREAMERS SVG ───
@@ -281,22 +593,77 @@ function triggerHintByFailure(p){
 
 // ─── EVENTOS DINÁMICOS ───
 const EVENTS=[
-  {t:82*60,fn:()=>showMessage('SISTEMA','Alguien activó la alarma desde dentro.',600)},
+  {t:85*60,fn:()=>{ playWind(); showMessage('SISTEMA','La temperatura de la mansión bajó 8 grados de golpe.',800); }},
+  {t:82*60,fn:()=>{ playFootsteps(); showMessage('SISTEMA','Alguien activó la alarma desde dentro.',600); }},
+  {t:78*60,fn:()=>{ showHorrorText('algo te observa desde el pasillo','#8b0000',2500); playBreathing(); }},
   {t:72*60,fn:()=>{ playWhisper(); showMessage('DESCONOCIDO','¿Por qué has vuelto? No debías.',900); }},
-  {t:64*60,fn:()=>{ triggerScreenGlitch(); showMessage('R.O.','Ayúdame. Sigo aquí. En el sótano.',1600); }},
-  {t:54*60,fn:()=>showMessage('SISTEMA','⚠ ACTIVIDAD PARANORMAL — Nivel crítico',300)},
-  {t:46*60,fn:()=>{ playDoorSlam(); showMessage('PADRE OLMEDO','La niña nunca debió nacer. Ese fue el principio.',700); }},
-  {t:38*60,fn:()=>{ if(Math.random()<0.6) triggerScreamer('TE OBSERVO'); else triggerScreenGlitch(); }},
-  {t:28*60,fn:()=>{ triggerScreenGlitch(); showMessage('ALGO','YA FALTA POCO. ¿O CREÍAS QUE IBAS A SALIR?',0); }},
-  {t:20*60,fn:()=>showMessage('ROSARIO OLMEDO','1947. Ese fue el año. Corre.',300)},
-  {t:11*60,fn:()=>{ showMessage('SISTEMA','⚠ 11 MINUTOS.',0); triggerHeartbeatEffect(); }},
-  {t:6*60, fn:()=>triggerScreamer('¡CORRE!')},
-  {t:2*60, fn:()=>{ showMessage('ALGO','QUEDATE · QUEDATE · QUEDATE',0); playScream(); }},
+  {t:68*60,fn:()=>{ playMusicBox(); showHorrorText('una caja de música suena sola en algún lugar','#6b5a48',3000); }},
+  {t:64*60,fn:()=>{ triggerScreenGlitch(); playViolinScratch(); showMessage('R.O.','Ayúdame. Sigo aquí. En el sótano.',1600); }},
+  {t:60*60,fn:()=>{ playWallKnock(); showHorrorText('tres golpes desde dentro de la pared','#8b0000',2500); }},
+  {t:54*60,fn:()=>{ playFootsteps(); showMessage('SISTEMA','⚠ ACTIVIDAD PARANORMAL — Nivel crítico',300); }},
+  {t:50*60,fn:()=>{ playDistantCrying(); showHorrorText('llanto de niño en el piso de arriba','#9b1c1c',3500); }},
+  {t:46*60,fn:()=>{ playDoorSlam(); playStringDissonance(); showMessage('PADRE OLMEDO','La niña nunca debió nacer. Ese fue el principio.',700); }},
+  {t:42*60,fn:()=>{ triggerSubtleScreamer(); playBreathing(); }},
+  {t:38*60,fn:()=>{ triggerScreenGlitch(); playViolinScratch(); if(Math.random()<0.5) triggerScreamer('TE OBSERVO'); showMessage('ROSARIO','No puedo parar de escuchar su voz. No puedo.',400); }},
+  {t:34*60,fn:()=>{ playWallKnock(); playDistantCrying(); showHorrorText('los golpes en la pared se acercan','#8b0000',3000); }},
+  {t:28*60,fn:()=>{ triggerScreenGlitch(); playDeadPiano(); showMessage('ALGO','YA FALTA POCO. ¿O CREÍAS QUE IBAS A SALIR?',0); }},
+  {t:24*60,fn:()=>{ playMusicBox(); showHorrorText('la caja de música para de golpe','#6b5a48',2000); }},
+  {t:20*60,fn:()=>{ playStringDissonance(); showMessage('ROSARIO OLMEDO','1947. Ese fue el año. Corre.',300); }},
+  {t:16*60,fn:()=>{ triggerScreamer('DETRÁS DE TI'); }},
+  {t:11*60,fn:()=>{ showMessage('SISTEMA','⚠ 11 MINUTOS.',0); triggerHeartbeatEffect(); playViolinScratch(); }},
+  {t:8*60, fn:()=>{ playFootsteps(); showHorrorText('los pasos bajan las escaleras','#c0392b',2500); }},
+  {t:6*60, fn:()=>{ triggerScreamer('¡CORRE!'); playScream(); }},
+  {t:4*60, fn:()=>{ playDistantCrying(); showHorrorText('el llanto es ahora un susurro en tu oído','#9b1c1c',3000); }},
+  {t:2*60, fn:()=>{ showMessage('ALGO','QUEDATE · QUEDATE · QUEDATE',0); playScream(); triggerScreenGlitch(); }},
+  {t:60,   fn:()=>{ triggerScreamer('FIN INMINENTE'); playStringDissonance(); }},
 ];
 EVENTS.forEach(e=>e.sent=false);
 function checkDynamicEvents(){ EVENTS.forEach(e=>{ if(!e.sent&&STATE.timerSeconds<=e.t){ e.sent=true; e.fn(); } }); }
-function triggerScreenGlitch(){ document.body.classList.add('glitch-body'); playGlitch(); setTimeout(()=>document.body.classList.remove('glitch-body'),380); }
+
+function triggerScreenGlitch(){
+  document.body.classList.add('glitch-body'); playGlitch();
+  setTimeout(()=>document.body.classList.remove('glitch-body'),380);
+}
 function triggerHeartbeatEffect(){ let n=0; const iv=setInterval(()=>{ playHeartbeat(true); if(++n>=10) clearInterval(iv); },650); }
+
+// Texto de horror que aparece brevemente en la pantalla (sin popup)
+function showHorrorText(text, color='#8b0000', duration=2500){
+  const el=document.createElement('div');
+  el.style.cssText=`
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    font-family:'IM Fell English',serif;font-style:italic;font-size:clamp(1rem,3vw,1.4rem);
+    color:${color};text-align:center;pointer-events:none;z-index:700;
+    animation:horror-text-appear ${duration}ms ease forwards;
+    text-shadow:0 0 20px ${color};max-width:80%;
+  `;
+  el.textContent=text;
+  if(!document.getElementById('horrorTextStyle')){
+    const s=document.createElement('style'); s.id='horrorTextStyle';
+    s.textContent=`@keyframes horror-text-appear{0%{opacity:0;letter-spacing:0.5em;}15%{opacity:1;letter-spacing:0.08em;}75%{opacity:0.9;}100%{opacity:0;letter-spacing:0.15em;}}`;
+    document.head.appendChild(s);
+  }
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), duration+100);
+}
+
+// Screamer sutil — imagen pequeña en esquina sin flash total
+function triggerSubtleScreamer(){
+  if(screamCooldown) return;
+  const el=document.createElement('div');
+  el.style.cssText=`
+    position:fixed;bottom:80px;right:0;width:120px;z-index:600;
+    animation:subtle-screamer 2.5s ease forwards;pointer-events:none;
+  `;
+  el.innerHTML=SCREAMERS[1]; // La figura del pasillo
+  if(!document.getElementById('subtleScreamerStyle')){
+    const s=document.createElement('style'); s.id='subtleScreamerStyle';
+    s.textContent=`@keyframes subtle-screamer{0%{opacity:0;transform:translateX(100%);}10%{opacity:0.8;transform:translateX(0);}80%{opacity:0.6;}100%{opacity:0;transform:translateX(20px);}}`;
+    document.head.appendChild(s);
+  }
+  document.body.appendChild(el);
+  playWhisper();
+  setTimeout(()=>el.remove(), 2600);
+}
 
 // ─── SISTEMA DE FASES ───
 const PHASES=[
@@ -1192,6 +1559,49 @@ function shareResult(){
   else{ navigator.clipboard.writeText(text).then(()=>alert('¡Texto copiado! Pégalo donde quieras.')).catch(()=>alert(text)); }
 }
 
+// ─── EFECTOS VISUALES DE TERROR ALEATORIOS ───
+
+function triggerScanLine(){
+  const el=document.createElement('div'); el.className='scan-line-effect';
+  document.body.appendChild(el); setTimeout(()=>el.remove(),2200);
+}
+
+function triggerVignettePulse(){
+  const v=document.getElementById('vignetteEl'); if(!v) return;
+  v.classList.add('pulse'); setTimeout(()=>v.classList.remove('pulse'),3100);
+}
+
+function triggerPageFlicker(){
+  const canvas=document.getElementById('gameCanvas'); if(!canvas) return;
+  canvas.classList.add('page-flicker'); setTimeout(()=>canvas.classList.remove('page-flicker'),250);
+}
+
+function triggerFogRise(){
+  const el=document.createElement('div'); el.className='fog-rise';
+  document.body.appendChild(el); setTimeout(()=>el.remove(),4200);
+}
+
+// Sistema de terror visual aleatorio — se ejecuta cada 20-40 segundos
+function startVisualTerrorLoop(){
+  const interval=()=>{
+    if(document.getElementById('endgameScreen')?.style.display!=='none') return;
+    const intensity=getIntensityLevel();
+    const r=Math.random();
+    if(r<0.3) triggerScanLine();
+    else if(r<0.55) triggerVignettePulse();
+    else if(r<0.7) triggerPageFlicker();
+    else if(r<0.85) { triggerFogRise(); }
+    else if(r<0.95) showHorrorText(
+      ['el suelo cruje bajo tus pies','una sombra pasa por el pasillo','huele a algo quemado','las paredes sudan','el frío llega de repente','alguien susurra tu nombre'][Math.floor(Math.random()*6)],
+      '#6b5a48', 2800
+    );
+    // A más intensidad, más frecuente
+    const next=(20000+Math.random()*20000)*(1-intensity*0.4);
+    setTimeout(interval, next);
+  };
+  setTimeout(interval, 15000);
+}
+
 // ─── INIT ───
 window.addEventListener('load',()=>{
   // Estilos adicionales
@@ -1220,8 +1630,12 @@ window.addEventListener('load',()=>{
   startAmbience();
   renderPhase0();
   updateScoreHUD();
+  startVisualTerrorLoop(); // ← Loop de efectos visuales aleatorios
 
+  // Mensajes de bienvenida perturbadores
   setTimeout(()=>showMessage('SISTEMA','Conexión activa. Buena suerte... la necesitarás.'),4500);
-  setTimeout(()=>playWhisper(),9000);
+  setTimeout(()=>{ playBreathing(); showHorrorText('una respiración detrás de ti','#6b5a48',2500); },12000);
   setTimeout(()=>showMessage('DESCONOCIDO','Ya te tenemos.',38000),38000);
+  setTimeout(()=>{ playMusicBox(); },20000);
+  setTimeout(()=>{ showHorrorText('¿puedes sentir que no estás solo?','#8b0000',3000); },55000);
 });
